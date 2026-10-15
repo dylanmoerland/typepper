@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>typepper</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  </style>
+  <script>
+    // keep Tab/Space/Backspace in the game instead of moving focus, scrolling or navigating
+    addEventListener("keydown", (e) => {
+      if (["Tab", " ", "Backspace", "ArrowLeft", "ArrowRight"].includes(e.key)) e.preventDefault();
+    });
+  </script>
+  <link data-trunk rel="rust" data-wasm-opt="z">
+</head>
+<body></body>
+</html>

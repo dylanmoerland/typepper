@@ -2,7 +2,9 @@
 //! the frame buffer, so they stack freely. Order is set in `ui::draw`.
 
 use std::f64::consts::PI;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use ratatui::prelude::*;
 

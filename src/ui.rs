@@ -1,4 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 use ratatui::prelude::*;
 use ratatui::symbols::Marker;
@@ -12,6 +14,13 @@ use crate::fx::{self, RANK_RGB, WHITE, anim_clock, hash, hsv, lerp, rank_color, 
 const FLASH: Duration = Duration::from_millis(120);
 const SHAKE: Duration = Duration::from_millis(250);
 const CALLOUT: Duration = Duration::from_millis(1200);
+/// Esc can't close a browser tab, so the web build doesn't offer it.
+const QUIT: &str = if cfg!(target_arch = "wasm32") {
+    ""
+} else {
+    " · esc quit"
+};
+
 const DIGITS: [[&str; 5]; 10] = [
     ["███", "█ █", "█ █", "█ █", "███"],
     [" █ ", "██ ", " █ ", " █ ", "███"],
@@ -203,11 +212,12 @@ fn typing(f: &mut Frame, area: Rect, t: &Test, now: Instant) -> (Rect, Rect) {
     f.render_widget(heat_bar(t.heat, t.rank, heat.width as usize), heat);
 
     let hint = if t.started.is_none() {
-        "←/→ mode · tab restart · esc quit"
+        format!("←/→ mode · tab restart{QUIT}")
     } else {
-        "tab restart · esc quit"
+        format!("tab restart{QUIT}")
     };
-    f.render_widget(Line::from(hint).dark_gray().centered(), help);
+    // style the span, not the line: a styled Line recolors the flames across the whole row
+    f.render_widget(Line::from(hint.dark_gray()).centered(), help);
     (panel, help)
 }
 
@@ -406,7 +416,7 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
     );
     f.render_widget(Line::from(line).dark_gray().centered(), details);
     f.render_widget(
-        Line::from("tab/enter again · ←/→ mode · esc quit")
+        Line::from(format!("tab/enter again · ←/→ mode{QUIT}"))
             .dark_gray()
             .centered(),
         help,

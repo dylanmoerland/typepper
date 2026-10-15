@@ -1,5 +1,7 @@
 use std::fmt;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mode {
