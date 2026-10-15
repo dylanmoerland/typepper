@@ -52,6 +52,7 @@ impl App {
             (Screen::Title { .. }, Key::Esc) => return true,
             (_, Key::Esc) => next = Some(Screen::Title { pick: 1 }),
             (Screen::Title { pick }, Key::Left | Key::Right) => *pick ^= 1,
+            (Screen::Title { .. }, Key::Char('t')) => crate::theme::toggle(),
             (Screen::Title { pick }, Key::Enter | Key::Char(' ')) => {
                 next = Some(if *pick == 0 {
                     practice(1)
@@ -154,6 +155,7 @@ impl App {
         if self.bot.is_some() {
             f.render_widget(Line::from(" DEMO ").black().on_magenta().bold(), f.area());
         }
+        crate::theme::apply(f.buffer_mut());
     }
 
     fn go(&mut self, screen: Screen, now: Instant) {
@@ -192,9 +194,9 @@ impl Bot {
     }
 
     fn drive(&mut self, t: &mut Test, now: Instant) {
-        // after a menu or a new test, take a breath instead of bursting the backlog
+        // after a menu or a new test, resync instead of bursting the backlog
         if t.started.is_none() && self.next + Duration::from_millis(500) < now {
-            self.next = now + Duration::from_millis(700);
+            self.next = now;
         }
         let mut rng = rand::rng();
         while self.next <= now && t.finished.is_none() {

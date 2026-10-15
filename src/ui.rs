@@ -189,14 +189,14 @@ fn typing(
     let pop = t.combo > 0
         && t.combo.is_multiple_of(25)
         && since(t.last_key, now) < Duration::from_millis(200);
-    let combo_style = match t.combo {
-        0 => Style::new().dark_gray(),
-        _ if pop => Style::new().white().bold(),
-        _ => Style::new().fg(color).bold(),
+    let combo_color = match t.combo {
+        0 => Color::DarkGray,
+        _ if pop => Color::White,
+        _ => color,
     };
     let mut lines: Vec<Line> = big(t.combo)
-        .into_iter()
-        .map(|r| Line::styled(r, combo_style))
+        .iter()
+        .map(|r| Line::from(solid(r, combo_color)))
         .collect();
     lines[1].push_span("  HITS".dark_gray());
     lines[3].push_span(format!("  ×{}", t.multiplier()).fg(color).bold());
@@ -398,15 +398,34 @@ fn wrap(text: &[char], width: usize) -> Vec<(usize, usize)> {
 }
 
 fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
-    let [_, label, score, peak, _, cards, chart, details, _, help] = Layout::vertical([
+    let [
+        _,
+        label,
+        _,
+        score,
+        _,
+        peak,
+        _,
+        cards,
+        _,
+        chart,
+        _,
+        details,
+        _,
+        help,
+    ] = Layout::vertical([
         Constraint::Fill(1),
+        Constraint::Length(1), // SCORE
         Constraint::Length(1),
-        Constraint::Length(5),
+        Constraint::Length(5), // digits
         Constraint::Length(1),
+        Constraint::Length(1), // peak
         Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Length(10),
+        Constraint::Length(3), // cards
         Constraint::Length(1),
+        Constraint::Length(10), // chart
+        Constraint::Length(1),
+        Constraint::Length(1), // details
         Constraint::Fill(1),
         Constraint::Length(1),
     ])
@@ -415,8 +434,8 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
 
     f.render_widget(Line::from("SCORE").dark_gray().centered(), label);
     let digits: Vec<Line> = big(t.score)
-        .into_iter()
-        .map(|r| Line::styled(r, color).bold())
+        .iter()
+        .map(|r| Line::from(solid(r, color)))
         .collect();
     f.render_widget(Paragraph::new(digits).centered(), score);
     let peak_line = Line::from(vec![
@@ -510,6 +529,18 @@ fn glyph(c: char) -> Option<[&'static str; 5]> {
     })
 }
 
+/// One row of a block glyph as cells. Full blocks also paint their
+/// background: fonts rarely fill the whole cell with `█`, which leaves seams
+/// between stacked rows (very visible on the web grid).
+fn solid(row: &str, color: Color) -> Vec<Span<'static>> {
+    row.chars()
+        .map(|c| match c {
+            '█' => Span::styled("█", Style::new().fg(color).bg(color)),
+            c => Span::styled(c.to_string(), Style::new().fg(color).bold()),
+        })
+        .collect()
+}
+
 /// A number in 5-row block digits.
 fn big(n: impl ToString) -> Vec<String> {
     let s = n.to_string();
@@ -598,10 +629,12 @@ pub fn title(f: &mut Frame, pick: usize, secs: f64) {
             "TYPEPPER"
                 .chars()
                 .enumerate()
-                .map(|(i, c)| {
+                .flat_map(|(i, c)| {
                     let k = (secs * 2.0 - i as f64 * 0.4).sin() * 0.5 + 0.5;
                     let rank = 2 + (k * 4.99) as usize;
-                    Span::styled(format!("{} ", glyph(c).unwrap()[row]), rank_color(rank))
+                    let mut cells = solid(glyph(c).unwrap()[row], rank_color(rank));
+                    cells.push(" ".into());
+                    cells
                 })
                 .collect()
         })
@@ -631,7 +664,12 @@ pub fn title(f: &mut Frame, pick: usize, secs: f64) {
         "6 cursed floors · collect sauces · face THE REAPER"
     };
     f.render_widget(Line::from(blurb.gray()).centered(), about);
-    let hint = format!("←/→ choose · enter start{QUIT}");
+    let theme = if crate::theme::is_light() {
+        "light"
+    } else {
+        "dark"
+    };
+    let hint = format!("←/→ choose · enter start · t theme: {theme}{QUIT}");
     f.render_widget(Line::from(hint.dark_gray()).centered(), help);
 }
 

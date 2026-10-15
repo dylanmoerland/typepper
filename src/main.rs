@@ -3,6 +3,7 @@ mod engine;
 mod fx;
 mod mods;
 mod run;
+mod theme;
 mod ui;
 
 use app::{App, Key};
@@ -14,7 +15,16 @@ fn main() -> std::io::Result<()> {
 
     use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-    let mut app = App::new(std::env::args().any(|a| a == "--demo"));
+    let args: Vec<String> = std::env::args().collect();
+    let flag = |f: &str| args.iter().any(|a| a == f);
+    // ask the terminal for its background before raw mode; unanswered → dark
+    let light = flag("--light")
+        || !flag("--dark")
+            && terminal_colorsaurus::theme_mode(Default::default())
+                .is_ok_and(|m| m == terminal_colorsaurus::ThemeMode::Light);
+    theme::set_light(light);
+
+    let mut app = App::new(flag("--demo"));
     ratatui::run(|terminal| {
         loop {
             terminal.draw(|f| app.draw(f))?;
@@ -57,9 +67,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use ratzilla::ratatui::Terminal;
     use ratzilla::{FontAtlasConfig, WebGl2Backend, WebRenderer};
 
-    let demo = ratzilla::web_sys::window()
+    let window = ratzilla::web_sys::window();
+    let query = window
+        .as_ref()
         .and_then(|w| w.location().search().ok())
-        .is_some_and(|q| q.contains("demo"));
+        .unwrap_or_default();
+    let demo = query.contains("demo");
+    let prefers_light = window
+        .and_then(|w| {
+            w.match_media("(prefers-color-scheme: light)")
+                .ok()
+                .flatten()
+        })
+        .is_some_and(|m| m.matches());
+    theme::set_light(query.contains("light") || prefers_light && !query.contains("dark"));
     let app = Rc::new(RefCell::new(App::new(demo)));
 
     // dynamic atlas rasterizes any glyph (blocks, faces, sparks) from the font stack
@@ -67,8 +88,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &["Menlo", "Consolas", "DejaVu Sans Mono", "monospace"],
         16.0,
     );
-    let backend =
-        WebGl2Backend::new_with_options(WebGl2BackendOptions::new().font_atlas_config(font))?;
+    let backend = WebGl2Backend::new_with_options(
+        WebGl2BackendOptions::new()
+            .font_atlas_config(font)
+            .canvas_padding_color(theme::page()),
+    )?;
     let mut terminal = Terminal::new(backend)?;
 
     terminal.on_key_event({
@@ -89,10 +113,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
 
+    // the page behind the grid follows the theme (also when `t` flips it)
+    let mut painted = None;
     terminal.draw_web(move |f| {
         let mut app = app.borrow_mut();
         app.tick(Instant::now());
         app.draw(f);
+        let light = theme::is_light();
+        if painted != Some(light) {
+            painted = Some(light);
+            if let Some(body) = ratzilla::web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.body())
+            {
+                let bg = if light { "#faf7f0" } else { "#000" }; // theme::page() as CSS
+                let _ = body.style().set_property("background", bg);
+            }
+        }
     });
     Ok(())
 }
