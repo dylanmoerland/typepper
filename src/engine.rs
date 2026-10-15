@@ -97,15 +97,54 @@ pub fn scoville(heat: f64) -> u32 {
     RANKS[r].shu + ((next_shu - RANKS[r].shu) as f64 * k) as u32
 }
 
+const WORDS: &str = include_str!("words.txt");
+
+/// `n` random common English words.
+pub fn random_words(n: usize) -> Vec<&'static str> {
+    use rand::seq::IndexedRandom;
+    let words: Vec<&str> = WORDS.split_whitespace().collect();
+    let mut rng = rand::rng();
+    (0..n).map(|_| *words.choose(&mut rng).unwrap()).collect()
+}
+
 /// Rank from which time counts as "hot" on the results screen.
 pub const HOT: usize = 4;
 
-// Tuning knobs. Steady state heat = (wpm² / 600) / HEAT_DECAY, so
-// 40wpm ≈ poblano, 60 ≈ jalapeño, 90 ≈ serrano, 110 ≈ habanero, 135+ ≈ reaper.
-const HEAT_GAIN: f64 = 1.2;
-const HEAT_DECAY: f64 = 0.33; // per second, exponential
-const MISS_KEEP: f64 = 0.4; // heat kept after a mistake
 const RANK_HYSTERESIS: f64 = 4.0;
+
+/// Rules of one test. Defaults are the practice game; sauces and curses
+/// (see `mods.rs`) tweak them for roguelike fights.
+pub struct Knobs {
+    /// Steady state heat = (wpm² / 600) · gain/1.2 / decay, so by default
+    /// 40wpm ≈ poblano, 60 ≈ jalapeño, 90 ≈ serrano, 110 ≈ habanero, 135+ ≈ reaper.
+    pub heat_gain: f64,
+    /// Per second, exponential.
+    pub heat_decay: f64,
+    /// Heat kept after a mistake.
+    pub miss_keep: f64,
+    /// Multiplier steps above ×1, one per 20 combo.
+    pub mult_steps: u32,
+    /// First miss in each word doesn't break combo or cool you down.
+    pub forgive_first_miss: bool,
+    /// Count a heal every N combo (`Test::heals`).
+    pub heal_every: Option<u32>,
+    /// Only this many upcoming chars are visible.
+    pub fog: Option<usize>,
+}
+
+impl Default for Knobs {
+    fn default() -> Self {
+        Knobs {
+            heat_gain: 1.2,
+            heat_decay: 0.33,
+            miss_keep: 0.4,
+            mult_steps: 3,
+            forgive_first_miss: false,
+            heal_every: None,
+            fog: None,
+        }
+    }
+}
 
 /// One typing test. Pure state: every time-dependent call takes `now`.
 #[derive(Default)]
@@ -136,7 +175,11 @@ pub struct Test {
     pub jalapenos: Vec<Instant>,
     /// Correct keystrokes: when, and which target index (for caret sparks).
     pub hits: Vec<(Instant, usize)>,
+    pub knobs: Knobs,
+    /// Heals earned through `Knobs::heal_every`.
+    pub heals: u32,
     last_tick: Option<Instant>,
+    word_missed: bool,
 }
 
 impl Test {
@@ -160,19 +203,34 @@ impl Test {
             let speed = self.last_key.map_or(1.0, |t| {
                 (0.2 / now.saturating_duration_since(t).as_secs_f64().max(0.01)).clamp(0.5, 3.0)
             });
-            self.heat = (self.heat + HEAT_GAIN * speed).min(100.0);
+            self.heat = (self.heat + self.knobs.heat_gain * speed).min(100.0);
             self.combo += 1;
             self.best_combo = self.best_combo.max(self.combo);
             self.hits.push((now, self.typed.len()));
             if self.combo.is_multiple_of(50) {
                 self.launch(now);
             }
+            if self
+                .knobs
+                .heal_every
+                .is_some_and(|n| self.combo.is_multiple_of(n))
+            {
+                self.heals += 1;
+            }
+            if c == ' ' {
+                self.word_missed = false;
+            }
             self.score += 10 * self.multiplier() as u64 * (1 + self.rank as u64);
+        } else if self.knobs.forgive_first_miss && !self.word_missed {
+            self.word_missed = true;
+            self.errors += 1;
+            self.last_error = Some(now);
         } else {
+            self.word_missed = true;
             if self.combo >= 20 {
                 self.broke = Some((self.combo, now));
             }
-            self.heat *= MISS_KEEP;
+            self.heat *= self.knobs.miss_keep;
             self.errors += 1;
             self.combo = 0;
             self.last_error = Some(now);
@@ -207,9 +265,9 @@ impl Test {
         }
     }
 
-    /// Guitar Hero style: ×1 → ×4, one step per 20 combo.
+    /// Guitar Hero style: ×1 → ×4 by default, one step per 20 combo.
     pub fn multiplier(&self) -> u32 {
-        1 + (self.combo / 20).min(3)
+        1 + (self.combo / 20).min(self.knobs.mult_steps)
     }
 
     fn cool(&mut self, now: Instant) {
@@ -220,7 +278,7 @@ impl Test {
         if self.rank >= HOT {
             self.hot_secs += dt;
         }
-        self.heat *= (-HEAT_DECAY * dt).exp();
+        self.heat *= (-self.knobs.heat_decay * dt).exp();
         self.update_rank(now);
     }
 
@@ -353,6 +411,27 @@ mod tests {
             Duration::from_secs(15)
         );
         assert_eq!(t.samples.len(), 4);
+    }
+
+    #[test]
+    fn knobs_forgive_heal_and_cap() {
+        let t0 = Instant::now();
+        let mut t = Test::new(Mode::Words(3), &["abc", "def", "ghi"]);
+        t.knobs.forgive_first_miss = true;
+        t.knobs.heal_every = Some(4);
+        t.knobs.mult_steps = 0;
+        type_str(&mut t, "abc d", t0);
+        t.type_char('x', t0); // first miss in "def": forgiven
+        assert_eq!((t.combo, t.errors), (5, 1));
+        t.backspace();
+        t.type_char('y', t0); // second miss in the same word: counts
+        assert_eq!(t.combo, 0);
+        t.backspace();
+        type_str(&mut t, "ef g", t0);
+        t.type_char('x', t0); // new word, forgiven again
+        assert_eq!(t.combo, 4);
+        assert_eq!(t.heals, 2, "combo 4 twice");
+        assert_eq!(t.multiplier(), 1);
     }
 
     #[test]

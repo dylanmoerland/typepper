@@ -1,6 +1,8 @@
 mod app;
 mod engine;
 mod fx;
+mod mods;
+mod run;
 mod ui;
 
 use app::{App, Key};
@@ -22,10 +24,10 @@ fn main() -> std::io::Result<()> {
                 && k.kind == KeyEventKind::Press
             {
                 let key = match k.code {
-                    KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         return Ok(());
                     }
+                    KeyCode::Esc => Some(Key::Esc),
                     KeyCode::Tab => Some(Key::Tab),
                     KeyCode::Enter => Some(Key::Enter),
                     KeyCode::Left => Some(Key::Left),
@@ -34,7 +36,9 @@ fn main() -> std::io::Result<()> {
                     KeyCode::Char(c) => Some(Key::Char(c)),
                     _ => None,
                 };
-                key.into_iter().for_each(|k| app.key(k));
+                if key.is_some_and(|k| app.key(k)) {
+                    return Ok(());
+                }
             }
             app.tick(Instant::now());
         }
@@ -71,6 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let app = app.clone();
         move |k| {
             let key = match k.code {
+                KeyCode::Esc => Key::Esc,
                 KeyCode::Tab => Key::Tab,
                 KeyCode::Enter => Key::Enter,
                 KeyCode::Left => Key::Left,
@@ -79,7 +84,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 KeyCode::Char(c) if !k.ctrl && !k.alt => Key::Char(c),
                 _ => return,
             };
-            app.borrow_mut().key(key);
+            // nothing to quit to in a browser tab
+            let _ = app.borrow_mut().key(key);
         }
     })?;
 
