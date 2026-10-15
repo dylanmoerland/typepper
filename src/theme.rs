@@ -27,8 +27,8 @@ pub fn toggle() {
 
 const PAPER: Color = Color::Rgb(250, 247, 240);
 
-/// Background around the grid (canvas padding on the web).
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+/// The page behind everything: canvas padding on the web, and the color
+/// sprites use for their empty pixels.
 pub fn page() -> Color {
     if is_light() { PAPER } else { Color::Black }
 }

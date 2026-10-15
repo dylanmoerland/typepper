@@ -8,6 +8,7 @@ use rand::RngExt;
 use rand::seq::SliceRandom;
 use web_time::Instant;
 
+use crate::cast::Look;
 use crate::engine::{Knobs, Mode, Test, random_words};
 use crate::mods::{Curse, SAUCES, Sauce};
 
@@ -17,59 +18,100 @@ pub struct Foe {
     /// Seconds between attacks.
     pub attack: f64,
     pub curse: Curse,
+    /// Small text face for terminals too short for the portrait.
     pub face: [&'static str; 3],
-    pub color: (u8, u8, u8),
+    pub look: Look,
 }
 
+impl Foe {
+    pub fn color(&self) -> (u8, u8, u8) {
+        let [r, g, b] = self.look.base;
+        (r as u8, g as u8, b as u8)
+    }
+}
+
+const fn look(base: [f64; 3], outline: [f64; 3], rx: f64, ry: f64) -> Look {
+    Look {
+        base,
+        outline,
+        rx,
+        ry,
+        lobes: 0.0,
+        lobe_depth: 0.0,
+        bumps: 0.0,
+        wrinkles: false,
+        hood: false,
+    }
+}
+
+// The run climbs the Scoville scale, ending at the hottest pepper there is.
 // ponytail: hp/attack tuned by eye with the demo bot; playtest before trusting them
 pub const FOES: [Foe; 6] = [
     Foe {
-        name: "CAPS GREMLIN",
+        name: "CAPS CAYENNE",
         hp: 3_000,
         attack: 12.0,
         curse: Curse::Caps,
         face: [" ▲ ▲ ", "(ÒдÓ)", " ╯ ╰ "],
-        color: (120, 200, 255),
+        look: look([215.0, 38.0, 28.0], [90.0, 10.0, 8.0], 104.0, 124.0),
     },
     Foe {
-        name: "NUMBER GNOME",
+        name: "NUMBER NAGA",
         hp: 4_500,
         attack: 11.0,
         curse: Curse::Numbers,
         face: [" #_# ", "(°□°)", " ╯ ╰ "],
-        color: (220, 210, 90),
+        look: Look {
+            bumps: 0.07,
+            ..look([235.0, 85.0, 25.0], [100.0, 30.0, 5.0], 100.0, 118.0)
+        },
     },
     Foe {
-        name: "PUNCTUATION IMP",
+        name: "PUNCTUATION PIMIENTO",
         hp: 6_000,
         attack: 10.0,
         curse: Curse::Punctuation,
         face: [" ;,; ", "(¬‿¬)", " ╯ ╰ "],
-        color: (200, 120, 255),
+        look: Look {
+            lobes: 2.0,
+            lobe_depth: 0.05,
+            ..look([225.0, 30.0, 50.0], [95.0, 5.0, 20.0], 112.0, 108.0)
+        },
     },
     Foe {
-        name: "MIRROR MITE",
+        name: "MIRROR MORITA",
         hp: 7_500,
         attack: 10.0,
         curse: Curse::Mirror,
         face: [" ┌─┐ ", "(ɘ_ɘ)", " ╯ ╰ "],
-        color: (170, 230, 240),
+        look: Look {
+            wrinkles: true,
+            ..look([135.0, 45.0, 35.0], [45.0, 10.0, 8.0], 100.0, 120.0)
+        },
     },
     Foe {
-        name: "SALT GOBLIN",
+        name: "SALT SCOTCH BONNET",
         hp: 9_000,
         attack: 9.0,
         curse: Curse::Shuffle,
         face: [" ▄▄▄ ", "(ò_ó)", " ╯ ╰ "],
-        color: (235, 235, 235),
+        look: Look {
+            lobes: 5.0,
+            lobe_depth: 0.07,
+            ..look([255.0, 175.0, 25.0], [120.0, 60.0, 0.0], 118.0, 100.0)
+        },
     },
     Foe {
-        name: "THE REAPER",
+        name: "THE CAROLINA REAPER",
         hp: 16_000,
         attack: 7.0,
         curse: Curse::Fog,
         face: [" ▄▀▀▄", "(×_×)", "╱▐█▌╲"],
-        color: (255, 0, 200),
+        look: Look {
+            bumps: 0.1,
+            hood: true,
+            ..look([175.0, 15.0, 30.0], [60.0, 0.0, 10.0], 100.0, 120.0)
+        },
     },
 ];
 
