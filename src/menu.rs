@@ -13,7 +13,7 @@ use web_time::Instant;
 
 use crate::best::{self, Bests};
 use crate::engine::Mode;
-use crate::fx::{Rgb, WHITE, fire, hash, lerp, mix, page_rgb, rank_color};
+use crate::fx::{Rgb, WHITE, blur, fire, hash, lerp, mix, page_rgb, rank_color};
 use crate::{pepper, theme, ui};
 
 pub struct Group {
@@ -580,27 +580,6 @@ fn blit(buf: &mut Buffer, card: &Buffer, x: i32, y: u16, focus: impl Fn(i32) -> 
             }
             buf[(sx as u16, sy)] = cell;
         }
-    }
-}
-
-/// One glyph out of focus by `f` (1 = sharp, 0 = gone). Box-drawing lines
-/// thin out and break up along their own direction; everything else turns
-/// into shade blocks, then dust. `None` keeps the glyph as it is.
-fn blur(sym: &str, f: f64) -> Option<&'static str> {
-    let step = |ramp: [&'static str; 5]| {
-        let i = [0.85, 0.6, 0.4, 0.22, 0.08].iter().position(|&t| f > t);
-        Some(i.map_or(" ", |i| ramp[i]))
-    };
-    match sym {
-        " " => Some(" "),
-        "━" | "─" => step(["─", "─", "┄", "╌", "·"]),
-        "┃" | "│" => step(["│", "│", "┆", "╎", "·"]),
-        "┏" | "╭" => step(["╭", "╭", "·", "·", "·"]),
-        "┓" | "╮" => step(["╮", "╮", "·", "·", "·"]),
-        "┗" | "╰" => step(["╰", "╰", "·", "·", "·"]),
-        "┛" | "╯" => step(["╯", "╯", "·", "·", "·"]),
-        _ if f > 0.85 => None,
-        _ => step(["▓", "▓", "▒", "░", "·"]),
     }
 }
 

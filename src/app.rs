@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use rand::RngExt;
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use web_time::Instant;
@@ -42,6 +43,9 @@ pub struct App {
     scored: bool,
     since: Instant,
     bot: Option<Bot>,
+    /// The last frame drawn, and the one crumbling away since a screen change.
+    frame: Option<Buffer>,
+    fade: Option<(Buffer, Instant)>,
 }
 
 impl App {
@@ -55,6 +59,8 @@ impl App {
             scored: false,
             since: now,
             bot: demo.then(Bot::new),
+            frame: None,
+            fade: None,
         }
     }
 
@@ -62,6 +68,8 @@ impl App {
     pub fn key(&mut self, key: Key) -> bool {
         let now = Instant::now();
         let mut next = None;
+        // tab mid-test restarts at once; every other screen change dissolves
+        let mut instant = false;
         match (&mut self.screen, key) {
             (Screen::Title, Key::Esc) => return true,
             // zen has no clock: esc is how it ends
@@ -84,7 +92,10 @@ impl App {
             (Screen::Title, Key::Enter | Key::Char(' ')) => self.menu.press(now),
             (Screen::Title, _) => {}
             (Screen::Practice(test), key) => match key {
-                Key::Tab => next = Some(practice(test.mode)),
+                Key::Tab => {
+                    instant = test.finished.is_none();
+                    next = Some(practice(test.mode));
+                }
                 Key::Enter if test.finished.is_some() => next = Some(practice(test.mode)),
                 Key::Backspace => test.backspace(now),
                 Key::Char(c) => test.type_char(c, now),
@@ -93,6 +104,9 @@ impl App {
         }
         if let Some(s) = next {
             self.go(s, now);
+            if instant {
+                self.fade = None;
+            }
         }
         false
     }
@@ -123,13 +137,15 @@ impl App {
                     }
                 }
                 test.tick(now);
-                // demo runs don't count
+                // finished: dissolve into results, and score it (demo runs don't count)
                 if let Some(end) = test.finished
                     && !self.scored
-                    && self.bot.is_none()
                 {
                     self.scored = true;
-                    self.outcome = self.bests.record(test, end);
+                    self.fade = self.frame.take().map(|b| (b, now));
+                    if self.bot.is_none() {
+                        self.outcome = self.bests.record(test, end);
+                    }
                 }
             }
         }
@@ -138,7 +154,7 @@ impl App {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame) {
+    pub fn draw(&mut self, f: &mut Frame) {
         let now = Instant::now();
         match &self.screen {
             Screen::Title => menu::draw(f, &self.menu, &self.bests, now),
@@ -148,12 +164,21 @@ impl App {
             f.render_widget(Line::from(" DEMO ").black().on_magenta().bold(), f.area());
         }
         crate::theme::apply(f.buffer_mut());
+        if let Some((old, at)) = &self.fade {
+            let k = now.saturating_duration_since(*at).as_secs_f64() / crate::fx::DISSOLVE;
+            match k < 1.0 {
+                true => crate::fx::dissolve(f.buffer_mut(), old, k),
+                false => self.fade = None,
+            }
+        }
+        self.frame = Some(f.buffer_mut().clone());
     }
 
     fn go(&mut self, screen: Screen, now: Instant) {
         self.screen = screen;
         self.since = now;
         (self.outcome, self.scored) = (None, false);
+        self.fade = self.frame.take().map(|b| (b, now));
     }
 }
 

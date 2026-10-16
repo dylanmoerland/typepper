@@ -712,6 +712,88 @@ pub fn vignette(buf: &mut Buffer, k: f64) {
     }
 }
 
+// ── results ─────────────────────────────────────────────────────────────
+
+pub const CONFETTI: f64 = 1.4;
+
+/// A new best: heat-colored confetti bursts up from `at` and rains down.
+pub fn confetti(buf: &mut Buffer, at: (u16, u16), age: f64) {
+    if !(0.0..CONFETTI).contains(&age) {
+        return;
+    }
+    let k = age / CONFETTI;
+    for n in 0..28u64 {
+        let a = (hash(n, 1, 9) as f64 / 255.0 - 0.5) * PI * 0.9 - PI / 2.0; // mostly up
+        let speed = 10.0 + hash(n, 2, 9) as f64 / 255.0 * 14.0;
+        let x = at.0 as f64 + a.cos() * speed * age * 2.0; // cells are ~2:1
+        let y = at.1 as f64 + a.sin() * speed * age + 14.0 * age * age;
+        let sym = ["✦", "*", "◆", "•"][(n % 4) as usize];
+        let c = hsv(n as f64 * 23.0, 1.0 - 0.3 * k, 1.0 - 0.6 * k);
+        put_behind(
+            buf,
+            x.round() as i32,
+            y.round() as i32,
+            sym,
+            Style::new().fg(c),
+        );
+    }
+}
+
+// ── transitions ─────────────────────────────────────────────────────────
+
+pub const DISSOLVE: f64 = 0.35;
+
+/// One glyph out of focus by `f` (1 = sharp, 0 = gone). Box-drawing lines
+/// thin out and break up along their own direction; everything else turns
+/// into shade blocks, then dust. `None` keeps the glyph as it is.
+pub fn blur(sym: &str, f: f64) -> Option<&'static str> {
+    let step = |ramp: [&'static str; 5]| {
+        let i = [0.85, 0.6, 0.4, 0.22, 0.08].iter().position(|&t| f > t);
+        Some(i.map_or(" ", |i| ramp[i]))
+    };
+    match sym {
+        " " => Some(" "),
+        "━" | "─" => step(["─", "─", "┄", "╌", "·"]),
+        "┃" | "│" => step(["│", "│", "┆", "╎", "·"]),
+        "┏" | "╭" => step(["╭", "╭", "·", "·", "·"]),
+        "┓" | "╮" => step(["╮", "╮", "·", "·", "·"]),
+        "┗" | "╰" => step(["╰", "╰", "·", "·", "·"]),
+        "┛" | "╯" => step(["╯", "╯", "·", "·", "·"]),
+        _ if f > 0.85 => None,
+        _ => step(["▓", "▓", "▒", "░", "·"]),
+    }
+}
+
+/// Crumble `old` (the previous screen) off the new one, `k` 0..1: each cell
+/// starts at its own moment, steps down the blur ramp, and lets the new
+/// screen through. Skipped if the terminal was resized in between.
+pub fn dissolve(buf: &mut Buffer, old: &Buffer, k: f64) {
+    if old.area != buf.area {
+        return;
+    }
+    let a = buf.area;
+    for y in a.top()..a.bottom() {
+        for x in a.left()..a.right() {
+            let r = hash(x as u64, y as u64, 77) as f64 / 255.0;
+            let local = ((k - r * 0.5) / 0.5).clamp(0.0, 1.0);
+            let cell = &old[(x, y)];
+            let sym = match local {
+                0.0 => None,
+                1.0 => continue,
+                _ => match blur(cell.symbol(), 1.0 - local) {
+                    Some(" ") => continue,
+                    s => s,
+                },
+            };
+            let mut cell = cell.clone();
+            if let Some(s) = sym {
+                cell.set_symbol(s);
+            }
+            buf[(x, y)] = cell;
+        }
+    }
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────
 
 /// The page color as RGB, for fading things into the background.
@@ -776,4 +858,33 @@ pub fn hsv(h: f64, s: f64, v: f64) -> Color {
     let m = v - c;
     let to = |u: f64| ((u + m) * 255.0) as u8;
     Color::Rgb(to(r), to(g), to(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dissolve_runs_from_old_screen_to_new() {
+        let area = Rect::new(0, 0, 20, 4);
+        let mut old = Buffer::empty(area);
+        old.set_string(0, 0, "OLD SCREEN ━━━━", Style::new());
+        let fresh = |k| {
+            let mut buf = Buffer::empty(area);
+            buf.set_string(0, 1, "new", Style::new());
+            dissolve(&mut buf, &old, k);
+            buf
+        };
+        let start = fresh(0.0);
+        assert_eq!(start[(0, 0)].symbol(), "O", "untouched at first");
+        assert_eq!(start[(11, 0)].symbol(), "━");
+        assert_eq!(
+            start[(0, 1)].symbol(),
+            " ",
+            "the old screen hides the new one at first"
+        );
+        let end = fresh(1.0);
+        assert_eq!(end[(0, 0)].symbol(), " ", "gone by the end");
+        assert_eq!(end[(0, 1)].symbol(), "n");
+    }
 }

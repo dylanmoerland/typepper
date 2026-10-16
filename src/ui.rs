@@ -430,6 +430,12 @@ fn wrap(text: &[char], width: usize) -> Vec<(usize, usize)> {
     lines
 }
 
+// results choreography, seconds after the test ends
+const PEAK_AT: f64 = 0.6;
+const CARDS_AT: f64 = 0.25;
+const CHART_AT: f64 = 0.5;
+const BEST_AT: f64 = 0.85;
+
 fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: Instant) {
     let [_, top, _, cards, _, chart, _, details, _, help] = Layout::vertical([
         Constraint::Fill(1),
@@ -458,9 +464,11 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     ])
     .areas(info);
     let color = rank_color(t.peak_rank);
+    // everything counts up and settles in over the first second, in order
+    let secs = since(t.finished, now).as_secs_f64();
+    let ease = |delay: f64, len: f64| 1.0 - (1.0 - ((secs - delay) / len).clamp(0.0, 1.0)).powi(3);
 
     // your peak pepper in 3D, spinning faster the hotter you got
-    let secs = since(t.finished, now).as_secs_f64();
     let pose = pepper::Pose {
         spin: secs * (0.6 + 0.25 * t.peak_rank as f64),
         tilt: 0.35 + 0.12 * (secs * 0.7).sin(),
@@ -473,7 +481,8 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     );
 
     f.render_widget(Line::from("SCORE").dark_gray().centered(), label);
-    let digits: Vec<Line> = big(t.score)
+    let shown = (t.score as f64 * ease(0.0, 0.8)).round() as u64;
+    let digits: Vec<Line> = big(shown)
         .iter()
         .map(|r| Line::from(solid(r, color)))
         .collect();
@@ -488,11 +497,16 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         )
         .dark_gray(),
     ]);
-    f.render_widget(peak_line.centered(), peak);
-    if let Some(o) = outcome {
+    if secs >= PEAK_AT {
+        f.render_widget(peak_line.centered(), peak);
+    }
+    if let Some(o) = outcome.filter(|_| secs >= BEST_AT) {
         let best_line = if o.is_new() {
-            // a new best shimmers through the heat colors
-            let c = hsv(20.0 + 40.0 * (secs * 4.0).sin(), 1.0, 1.0);
+            // a new best lands white-hot, then shimmers through the heat colors
+            let c = match secs - BEST_AT < 0.15 {
+                true => Color::White,
+                false => hsv(20.0 + 40.0 * (secs * 4.0).sin(), 1.0, 1.0),
+            };
             let mut spans = vec![
                 format!("★ NEW BEST {}", best::show(t.mode, o.value))
                     .fg(c)
@@ -505,37 +519,62 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         } else {
             Line::from(format!("best {}", best::show(t.mode, o.was.unwrap_or(o.value))).dark_gray())
         };
+        let mid = best_row.x + best_row.width / 2;
         f.render_widget(best_line.centered(), best_row);
+        if o.is_new() {
+            fx::confetti(f.buffer_mut(), (mid, best_row.y), secs - BEST_AT);
+        }
     }
 
     let card_areas: [Rect; 4] = Layout::horizontal([Constraint::Fill(1); 4])
         .spacing(1)
         .areas(cards);
     let stats = [
-        ("wpm", format!("{:.0}", t.wpm(now)), Color::Yellow),
-        ("acc", format!("{:.0}%", t.accuracy()), Color::Green),
-        ("raw", format!("{:.0}", t.raw_wpm(now)), Color::Cyan),
-        ("best combo", format!("×{}", t.best_combo), Color::Magenta),
+        ("wpm", t.wpm(now), "", Color::Yellow),
+        ("acc", t.accuracy(), "%", Color::Green),
+        ("raw", t.raw_wpm(now), "", Color::Cyan),
+        ("best combo", t.best_combo as f64, "×", Color::Magenta),
     ];
-    for ((label, value, c), a) in stats.into_iter().zip(card_areas) {
+    // cards drop in one after another, their numbers counting up
+    for (j, ((label, value, unit, c), a)) in stats.into_iter().zip(card_areas).enumerate() {
+        let delay = CARDS_AT + 0.1 * j as f64;
+        if secs < delay {
+            continue;
+        }
+        let k = ease(delay, 0.5);
+        let n = format!("{:.0}", value * k);
+        let value = match unit {
+            "×" => format!("×{n}"),
+            u => format!("{n}{u}"),
+        };
+        let fresh = secs - delay < 0.12; // lands with a white flash
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
             .title(label)
-            .dark_gray();
+            .border_style(if fresh { Color::White } else { Color::DarkGray })
+            .title_style(Color::DarkGray);
+        let a = Rect {
+            y: a.y
+                .saturating_sub(((1.0 - ease(delay, 0.2)) * 2.0).round() as u16),
+            ..a
+        };
         f.render_widget(
             Paragraph::new(value.fg(c).bold()).centered().block(block),
             a,
         );
     }
 
-    let secs = t.elapsed(now).as_secs_f64();
+    let took = t.elapsed(now).as_secs_f64();
+    let max_x = took.max(2.0);
+    // the line draws itself left to right
+    let reach = 1.0 + (max_x - 1.0) * ease(CHART_AT, 0.8);
     let pts: Vec<(f64, f64)> = t
         .samples
         .iter()
         .enumerate()
-        .map(|(i, w)| ((i as f64 + 1.0).min(secs), *w))
+        .map(|(i, w)| ((i as f64 + 1.0).min(took), *w))
+        .filter(|&(x, _)| x <= reach)
         .collect();
-    let max_x = secs.max(2.0);
     let max_y = (t.samples.iter().cloned().fold(0.0, f64::max) * 1.2).max(10.0);
     let dataset = Dataset::default()
         .marker(Marker::Braille)
@@ -563,7 +602,7 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     };
     let line = format!(
         "{mode} · {:.1}s · {} correct · {} wrong · {} slips",
-        secs,
+        took,
         t.correct(),
         t.typed.len() - t.correct(),
         t.errors
