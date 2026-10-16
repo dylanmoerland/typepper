@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
   <title>typepper — a spicy little typing game &amp; typing test</title>
   <meta name="description" content="A spicy little typing game and typing test: climb the Scoville scale as your WPM heats up, in sprint, blitz, zen and survival modes. Free, in your browser or your terminal.">
   <link rel="canonical" href="https://typepper.com/">
@@ -87,6 +87,20 @@
     footer button:hover, footer a:hover { color: var(--hot); border-color: var(--hot); }
     footer a { color: var(--ink); text-decoration: none; }
     footer a .heart { color: var(--hot); }
+    /* phones: a hidden field brings up the keyboard; buttons stand in for esc and s */
+    #kb {
+      position: fixed; top: 0; left: 0; width: 1px; height: 1px;
+      opacity: 0; border: 0; padding: 0; font-size: 16px; /* 16px: no iOS zoom */
+    }
+    .pad { display: none; }
+    .touch .pad {
+      display: block; position: fixed; top: 10px; z-index: 1;
+      font: 18px/1 "Departure Mono", Menlo, monospace; color: var(--dim);
+      background: var(--chip); border: 1px solid var(--line); border-radius: 6px;
+      padding: 8px 11px;
+    }
+    #esc { left: 10px; }
+    #gear { right: 10px; }
     footer a svg { width: 14px; height: 14px; vertical-align: -2px; fill: currentColor; }
   </style>
   <script>
@@ -102,6 +116,10 @@
   <link data-trunk rel="rust" data-wasm-opt="z">
 </head>
 <body>
+  <input id="kb" type="text" autocomplete="off" autocapitalize="off" autocorrect="off"
+    spellcheck="false" enterkeyhint="go" aria-label="Type here to play">
+  <button id="esc" class="pad" type="button" aria-label="Back (esc)">✕</button>
+  <button id="gear" class="pad" type="button" aria-label="Settings">⚙</button>
   <header class="sr-only">
     <h1>typepper — a spicy little typing game</h1>
     <p>A typing game and typing test where your speed is heat: type fast and clean to climb the
@@ -130,11 +148,58 @@
     // the game hears keys only while its canvas has focus: give it focus as
     // soon as it appears, and back after any click outside the footer
     const game = document.getElementById("game");
-    const focusGame = () => game.querySelector("canvas")?.focus({ preventScroll: true });
+    const touch = matchMedia("(pointer: coarse)").matches || location.search.includes("touch");
+    const focusGame = () => !touch && game.querySelector("canvas")?.focus({ preventScroll: true });
     new MutationObserver(focusGame).observe(game, { childList: true });
     addEventListener("pointerdown", (e) => {
-      if (!e.target.closest("footer")) setTimeout(focusGame);
+      if (!e.target.closest("footer, .pad")) setTimeout(focusGame);
     });
+
+    // phones: no keys to press, so a hidden field opens the keyboard and its
+    // input is handed to the game as key presses; swipes are arrows, a tap is enter
+    if (touch) {
+      document.documentElement.classList.add("touch");
+      const send = (key) =>
+        game.querySelector("canvas")?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+      const kb = document.getElementById("kb");
+      // a placeholder char, so backspace on an "empty" field still fires (Android)
+      const PAD = " ";
+      const reset = () => { kb.value = PAD; kb.setSelectionRange(PAD.length, PAD.length); };
+      reset();
+      kb.addEventListener("input", () => {
+        const v = kb.value;
+        if (v.length < PAD.length) send("Backspace");
+        else for (const ch of v.slice(PAD.length)) send(ch);
+        reset();
+      });
+      kb.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); send("Enter"); }
+      });
+      const keyboard = () => kb.focus({ preventScroll: true });
+      let start = null;
+      game.addEventListener("touchstart", (e) => {
+        const t = e.touches[0];
+        start = { x: t.clientX, y: t.clientY };
+      }, { passive: true });
+      game.addEventListener("touchend", (e) => {
+        if (!start) return;
+        const t = e.changedTouches[0], dx = t.clientX - start.x, dy = t.clientY - start.y;
+        start = null;
+        keyboard();
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return send("Enter");
+        send(Math.abs(dx) > Math.abs(dy)
+          ? (dx < 0 ? "ArrowRight" : "ArrowLeft")
+          : (dy < 0 ? "ArrowDown" : "ArrowUp"));
+      });
+      document.getElementById("esc").addEventListener("click", () => { send("Escape"); keyboard(); });
+      // F2: only the menu listens (opens settings), so it never types into a test
+      document.getElementById("gear").addEventListener("click", () => send("F2"));
+      // iOS keeps the page full height under the keyboard: follow the visible part
+      visualViewport?.addEventListener("resize", () => {
+        document.body.style.height = visualViewport.height + "px";
+        scrollTo(0, 0);
+      });
+    }
 
     const copy = document.getElementById("copy");
     copy.addEventListener("click", async () => {

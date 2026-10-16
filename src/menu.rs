@@ -43,7 +43,7 @@ pub const MENU: [Group; 4] = [
     },
     Group {
         name: "ZEN",
-        blurb: "no clock, no pressure · esc to finish",
+        blurb: "no clock, no pressure · stop whenever",
         color: (60, 200, 190),
         scene: zen,
         modes: &[Mode::Zen],
@@ -366,7 +366,10 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
 
     dots(f.buffer_mut(), dot_row, m.scroll(now));
     // padded so the scenery keeps a little distance from the text
-    let hint = format!("  ←/→ mode · ↑/↓ length · enter play · s settings{QUIT}  ");
+    let hint = match crate::settings::touch() {
+        true => "  swipe ←/→ mode · ↑/↓ length · tap to play  ".to_string(),
+        false => format!("  ←/→ mode · ↑/↓ length · enter play · s settings{QUIT}  "),
+    };
     Line::from(hint.dark_gray())
         .centered()
         .render(help, f.buffer_mut());

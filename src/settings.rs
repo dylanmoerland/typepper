@@ -15,6 +15,18 @@ pub fn calm() -> bool {
     CALM.load(Ordering::Relaxed)
 }
 
+/// Played by touch (a phone in the browser): hints talk about taps, not keys.
+static TOUCH: AtomicBool = AtomicBool::new(false);
+
+pub fn touch() -> bool {
+    TOUCH.load(Ordering::Relaxed)
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn set_touch(on: bool) {
+    TOUCH.store(on, Ordering::Relaxed);
+}
+
 /// Web font choices, the default first; "system" is the built-in stack.
 /// Glyphs a font lacks (blocks, braille…) fall back to the system stack.
 pub const FONTS: [&str; 5] = [

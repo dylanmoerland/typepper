@@ -11,7 +11,7 @@ use ratatui::widgets::{
 use crate::best::{self, Outcome};
 use crate::engine::{FUEL, HOT, Mode, RANKS, Test, scoville};
 use crate::fx::{self, RANK_RGB, WHITE, anim_clock, hash, hsv, lerp, rank_color, since};
-use crate::settings::calm;
+use crate::settings::{calm, touch};
 use crate::{menu, pepper};
 
 const FLASH: Duration = Duration::from_millis(120);
@@ -296,9 +296,12 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
 
     f.render_widget(heat_bar(t.heat, t.rank, heat.width as usize), heat);
 
-    let hint = match t.mode {
-        Mode::Zen if t.started.is_some() => "esc finish · tab restart",
-        _ => "tab restart · esc menu",
+    let zen_on = t.mode == Mode::Zen && t.started.is_some();
+    let hint = match (touch(), zen_on) {
+        (true, true) => "✕ finish",
+        (true, false) => "✕ menu",
+        (false, true) => "esc finish · tab restart",
+        (false, false) => "tab restart · esc menu",
     };
     // style the span, not the line: a styled Line recolors the flames across the whole row
     // padded so the flames keep a little distance from the text
@@ -621,9 +624,12 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     );
     f.render_widget(Line::from(line).dark_gray().centered(), details);
     f.render_widget(
-        Line::from("  tab/enter again · esc menu  ")
-            .dark_gray()
-            .centered(),
+        Line::from(match touch() {
+            true => "  tap to play again · ✕ menu  ",
+            false => "  tab/enter again · esc menu  ",
+        })
+        .dark_gray()
+        .centered(),
         help,
     );
 }

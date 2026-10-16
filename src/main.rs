@@ -48,6 +48,7 @@ fn main() -> std::io::Result<()> {
                     KeyCode::Up => Some(Key::Up),
                     KeyCode::Down => Some(Key::Down),
                     KeyCode::Backspace => Some(Key::Backspace),
+                    KeyCode::F(2) => Some(Key::Settings),
                     KeyCode::Char(c) => Some(Key::Char(c)),
                     _ => None,
                 };
@@ -104,6 +105,10 @@ fn start(font: &'static str) -> Result<(), Box<dyn std::error::Error>> {
         })
         .is_some_and(|m| m.matches());
     theme::set_light(query.contains("light") || prefers_light && !query.contains("dark"));
+    let coarse = ratzilla::web_sys::window()
+        .and_then(|w| w.match_media("(pointer: coarse)").ok().flatten())
+        .is_some_and(|m| m.matches());
+    settings::set_touch(coarse || query.contains("touch"));
     let app = Rc::new(RefCell::new(App::new(demo)));
 
     // dynamic atlas rasterizes any glyph (blocks, faces, sparks) from the font stack
@@ -132,6 +137,7 @@ fn start(font: &'static str) -> Result<(), Box<dyn std::error::Error>> {
                 KeyCode::Up => Key::Up,
                 KeyCode::Down => Key::Down,
                 KeyCode::Backspace => Key::Backspace,
+                KeyCode::F(2) => Key::Settings,
                 KeyCode::Char(c) if !k.ctrl && !k.alt => Key::Char(c),
                 _ => return,
             };

@@ -25,6 +25,8 @@ pub enum Key {
     Up,
     Down,
     Backspace,
+    /// F2, or the web page’s ⚙ button on phones (no s key to press there).
+    Settings,
     Char(char),
 }
 
@@ -97,7 +99,7 @@ impl App {
                     self.settings.save();
                     d.changed = Some(now);
                 }
-                Key::Esc | Key::Enter | Key::Char('s') => {
+                Key::Esc | Key::Enter | Key::Char('s') | Key::Settings => {
                     self.dialog = None;
                     if (self.settings.font, crate::theme::is_light()) != self.loaded {
                         reload();
@@ -121,7 +123,9 @@ impl App {
             }
             // enter was pressed: the card is springing, the test is coming
             (Screen::Title, _) if self.menu.pressing() => {}
-            (Screen::Title, Key::Char('s')) => self.dialog = Some(Dialog::new(now)),
+            (Screen::Title, Key::Char('s') | Key::Settings) => {
+                self.dialog = Some(Dialog::new(now));
+            }
             (Screen::Title, Key::Left) => self.menu.swipe(-1, now),
             (Screen::Title, Key::Right) => self.menu.swipe(1, now),
             (Screen::Title, Key::Up) => self.menu.length(-1, now),
