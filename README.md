@@ -3,6 +3,10 @@
 </p>
 
 <p align="center">
+  <a href="https://ratatui.rs/"><img alt="Built With Ratatui" src="https://img.shields.io/badge/Built_With_Ratatui-000?logo=ratatui&logoColor=fff"></a>
+</p>
+
+<p align="center">
   <img alt="typepper in action: swiping the mode carousel, then a BLITZ run climbing the heat ranks to CAROLINA REAPER with fever, flames and a cheering crowd" src="assets/gifs/hero.gif" width="714">
 </p>
 
@@ -39,6 +43,18 @@ Five modes on a carousel: sprint, blitz, zen, survival and floor is lava.
 <p align="center"><img alt="a hot BLITZ run up close: caret flame, fever trail, then a wrong key shatters a 137 combo" src="assets/gifs/streak.gif" width="644"></p>
 
 Recorded with `demo/record.sh` (the autopilot types; see the script).
+
+## Built with
+
+typepper is a [Ratatui](https://ratatui.rs/) app from top to bottom: every card, flame, and
+falling word is drawn with it, and it's what made a game like this fun to build in a terminal.
+Thank you to the Ratatui team and community.
+
+- [Ratatui](https://ratatui.rs/): the terminal UI library everything is drawn with
+- [Ratzilla](https://github.com/ratatui/ratzilla), also from the Ratatui project: runs the same app in the browser (WebGL2, via [beamterm](https://github.com/junkdog/beamterm))
+- [crossterm](https://github.com/crossterm-rs/crossterm): the terminal backend
+- [cargo-dist](https://github.com/axodotdev/cargo-dist) builds the releases and installers; [Trunk](https://github.com/trunk-rs/trunk) builds the web version
+- [Departure Mono](https://departuremono.com) by Helena Zhang: the pixel font of the web game and the recordings
 
 ## License
 
