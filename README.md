@@ -1,11 +1,6 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/lockup-dark.svg">
-    <img alt="typepper" src="assets/logo/lockup-light.svg" width="480">
-  </picture>
+  <a href="https://typepper.com"><img alt="typepper — a spicy little typing game for your terminal and browser: sprint, blitz, zen and survival" src="assets/logo/og.png" width="720"></a>
 </p>
-
-<p align="center"><em>A spicy little terminal typing trainer</em></p>
 
 ## Play
 
