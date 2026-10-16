@@ -1,19 +1,99 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>typepper</title>
+  <meta name="description" content="A spicy little typing game: climb the Scoville scale in sprint, blitz, zen and survival. Play in your browser or your terminal.">
+  <link data-trunk rel="copy-dir" href="assets/fonts">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- the other font choices in settings; display=block so the game never bakes in a fallback -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Code&family=IBM+Plex+Mono&family=JetBrains+Mono&display=block">
   <style>
-    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    @font-face {
+      font-family: "Departure Mono";
+      src: url("fonts/DepartureMono-Regular.woff2") format("woff2");
+      font-display: block;
+    }
+    /* follows the game's theme: the game sets data-theme on <html> */
+    :root { --bg: #000; --ink: #c8c4cc; --dim: #6e6a74; --line: #1d1b20; --chip: #121114; --hot: #ff8c00; }
+    [data-theme="light"] { --bg: #faf7f0; --ink: #2a2630; --dim: #8a8590; --line: #e6e0d4; --chip: #efe9de; --hot: #c25a00; }
+    html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+    body { display: flex; flex-direction: column; }
+    #game { flex: 1; min-height: 0; }
+    #game canvas:focus { outline: none; }
+    footer {
+      flex: none;
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+      gap: 6px 14px;
+      padding: 8px 16px;
+      border-top: 1px solid var(--line);
+      font: 13px/1.4 "Departure Mono", Menlo, Consolas, monospace;
+      color: var(--dim);
+    }
+    footer .cmd { display: flex; align-items: center; gap: 6px; max-width: 100%; }
+    footer code {
+      color: var(--ink); background: var(--chip);
+      padding: 3px 8px; border-radius: 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      user-select: all; font: inherit;
+    }
+    footer button {
+      font: inherit; color: var(--ink); background: none;
+      border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; cursor: pointer;
+    }
+    footer button:hover, footer a:hover { color: var(--hot); border-color: var(--hot); }
+    footer a { color: var(--ink); text-decoration: none; }
+    footer a .heart { color: var(--hot); }
   </style>
   <script>
-    // keep Tab/Space/Backspace in the game instead of moving focus, scrolling or navigating
+    // keep the game's keys in the game instead of moving focus, scrolling or navigating;
+    // the footer's own buttons and links still work
     addEventListener("keydown", (e) => {
-      if (["Tab", " ", "Backspace", "ArrowLeft", "ArrowRight"].includes(e.key)) e.preventDefault();
+      if (e.target.closest && e.target.closest("footer")) return;
+      if (["Tab", " ", "Backspace", "Enter", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        e.preventDefault();
+      }
     });
   </script>
   <link data-trunk rel="rust" data-wasm-opt="z">
 </head>
-<body></body>
+<body>
+  <main id="game"></main>
+  <footer>
+    <span>play it in your terminal</span>
+    <span class="cmd">
+      <!-- ponytail: final once the release pipeline publishes the installer here -->
+      <code id="install">curl -LsSf https://leodiegues.github.io/typepper/install.sh | sh</code>
+      <button id="copy" type="button" aria-label="Copy the install command">copy</button>
+    </span>
+    <a href="https://github.com/sponsors/leodiegues" target="_blank" rel="noopener"><span class="heart">♥</span> sponsor</a>
+  </footer>
+  <script>
+    // the game hears keys only while its canvas has focus: give it focus as
+    // soon as it appears, and back after any click outside the footer
+    const game = document.getElementById("game");
+    const focusGame = () => game.querySelector("canvas")?.focus({ preventScroll: true });
+    new MutationObserver(focusGame).observe(game, { childList: true });
+    addEventListener("pointerdown", (e) => {
+      if (!e.target.closest("footer")) setTimeout(focusGame);
+    });
+
+    const copy = document.getElementById("copy");
+    copy.addEventListener("click", async () => {
+      const install = document.getElementById("install");
+      try {
+        await navigator.clipboard.writeText(install.textContent);
+        copy.textContent = "copied!";
+      } catch {
+        // clipboard blocked (permissions, http): select it for a manual copy
+        getSelection().selectAllChildren(install);
+        copy.textContent = "now ⌘C / ctrl+C";
+      }
+      focusGame();
+      setTimeout(() => (copy.textContent = "copy"), 1500);
+    });
+  </script>
+</body>
 </html>

@@ -60,10 +60,28 @@ fn main() -> std::io::Result<()> {
     })
 }
 
-/// Browser entry: WebGL2 grid, ticked and drawn every animation frame.
+/// Browser entry: waits for the chosen web font, then starts the game.
 /// `?demo` in the URL turns on the autopilot.
 #[cfg(target_arch = "wasm32")]
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
+    use wasm_bindgen_futures::JsFuture;
+
+    let font = settings::FONTS[settings::Settings::load().font];
+    wasm_bindgen_futures::spawn_local(async move {
+        // the atlas measures cells and rasterizes glyphs as soon as it exists:
+        // load the web font first, or the fallback gets baked in for good
+        let doc = ratzilla::web_sys::window().and_then(|w| w.document());
+        if font != "system"
+            && let Some(load) = doc.map(|d| d.fonts().load(&format!("16px \"{font}\"")))
+        {
+            let _ = JsFuture::from(load).await;
+        }
+        start(font).expect("typepper failed to start");
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start(font: &'static str) -> Result<(), Box<dyn std::error::Error>> {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -89,13 +107,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Rc::new(RefCell::new(App::new(demo)));
 
     // dynamic atlas rasterizes any glyph (blocks, faces, sparks) from the font stack
-    let font = FontAtlasConfig::dynamic(
-        &["Menlo", "Consolas", "DejaVu Sans Mono", "monospace"],
-        16.0,
-    );
+    let system = ["Menlo", "Consolas", "DejaVu Sans Mono", "monospace"];
+    let stack: Vec<&str> = std::iter::once(font)
+        .filter(|&f| f != "system")
+        .chain(system)
+        .collect();
     let backend = WebGl2Backend::new_with_options(
         WebGl2BackendOptions::new()
-            .font_atlas_config(font)
+            .grid_id("game") // sized by the page, leaving room for the footer
+            .font_atlas_config(FontAtlasConfig::dynamic(&stack, 16.0))
             .canvas_padding_color(theme::page()),
     )?;
     let mut terminal = Terminal::new(backend)?;
@@ -120,7 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     })?;
 
-    // the page behind the grid follows the theme (also when `t` flips it)
+    // the page around the grid follows the theme (also when settings flip it)
     let mut painted = None;
     terminal.draw_web(move |f| {
         let mut app = app.borrow_mut();
@@ -129,12 +149,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let light = theme::is_light();
         if painted != Some(light) {
             painted = Some(light);
-            if let Some(body) = ratzilla::web_sys::window()
+            if let Some(root) = ratzilla::web_sys::window()
                 .and_then(|w| w.document())
-                .and_then(|d| d.body())
+                .and_then(|d| d.document_element())
             {
-                let bg = if light { "#faf7f0" } else { "#000" }; // theme::page() as CSS
-                let _ = body.style().set_property("background", bg);
+                let _ = root.set_attribute("data-theme", if light { "light" } else { "dark" });
             }
         }
     });

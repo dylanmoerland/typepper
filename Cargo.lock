@@ -1732,6 +1732,7 @@ dependencies = [
  "ratatui",
  "ratzilla",
  "terminal-colorsaurus",
+ "wasm-bindgen-futures",
  "web-sys",
  "web-time",
 ]
