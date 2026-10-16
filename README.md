@@ -2,6 +2,10 @@
   <a href="https://typepper.com"><img alt="typepper — a spicy little typing game for your terminal and browser: sprint, blitz, zen, survival and floor is lava" src="assets/logo/og.png" width="720"></a>
 </p>
 
+<p align="center">
+  <img alt="typepper in action: swiping the mode carousel, then a BLITZ run climbing the heat ranks to CAROLINA REAPER with fever, flames and a cheering crowd" src="assets/gifs/hero.gif" width="714">
+</p>
+
 ## Play
 
 **In your browser:** https://typepper.com/
@@ -19,6 +23,22 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/leodiegues/typeppe
 ```
 
 Or build it yourself: `cargo install --git https://github.com/leodiegues/typepper`
+
+## A look
+
+Five modes on a carousel: sprint, blitz, zen, survival and floor is lava.
+
+<p align="center"><img alt="the mode carousel: cards blur toward the edges while each mode's scenery cross-fades in" src="assets/gifs/menu.gif" width="714"></p>
+
+**FLOOR IS LAVA:** type the falling words before they land; every one that does raises the lava.
+
+<p align="center"><img alt="FLOOR IS LAVA from level 10: words fall, one is locked onto and typed, missed words splash into rising lava until the run is cooked" src="assets/gifs/lava.gif" width="714"></p>
+
+**Streaks:** the caret catches fire, fever turns the trail to embers, and a broken combo shatters.
+
+<p align="center"><img alt="a hot BLITZ run up close: caret flame, fever trail, then a wrong key shatters a 137 combo" src="assets/gifs/streak.gif" width="644"></p>
+
+Recorded with `demo/record.sh` (the autopilot types; see the script).
 
 ## License
 

@@ -30,3 +30,7 @@ rustc-ice-*.txt
 
 # trunk output
 /dist
+
+# recordings: demo/record.sh remakes them (the GIFs used by the README are committed)
+/assets/gifs/*.mp4
+.DS_Store

@@ -83,7 +83,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(demo: bool) -> Self {
+    /// `bot`: the demo tour or the autopilot typist, if any (see `Bot`).
+    pub fn new(bot: Option<Bot>) -> Self {
         let now = Instant::now();
         let detected_light = crate::theme::is_light();
         let settings = Settings::load();
@@ -100,7 +101,7 @@ impl App {
             outcome: None,
             scored: false,
             since: now,
-            bot: demo.then(Bot::new),
+            bot,
             frame: None,
             fade: None,
         }
@@ -201,7 +202,8 @@ impl App {
     pub fn tick(&mut self, now: Instant) {
         let mut next = None;
         // demo: take the suggested starting level after a moment
-        if self.bot.is_some() && self.pick.as_ref().is_some_and(|p| p.age(now) > 0.8) {
+        let touring = self.bot.as_ref().is_some_and(|b| b.tour);
+        if touring && self.pick.as_ref().is_some_and(|p| p.age(now) > 0.8) {
             self.start_from();
         }
         let idle = now.saturating_duration_since(self.since);
@@ -215,7 +217,7 @@ impl App {
                 ask = mode.leveled().then_some(mode);
             }
             // demo: show off the carousel for a lap, then play
-            Screen::Title if self.bot.is_some() && idle > Duration::from_millis(1200) => {
+            Screen::Title if touring && idle > Duration::from_millis(1200) => {
                 if self.menu.lap_done() {
                     self.menu.press(now);
                 } else {
@@ -227,9 +229,10 @@ impl App {
             Screen::Practice(test) => {
                 if let Some(bot) = self.bot.as_mut().filter(|_| !picking) {
                     bot.drive(test, now);
-                    if test
-                        .finished
-                        .is_some_and(|f| now - f > Duration::from_secs(4))
+                    if touring
+                        && test
+                            .finished
+                            .is_some_and(|f| now - f > Duration::from_secs(4))
                     {
                         next = Some(practice(test.mode, test.start_level));
                     }
@@ -239,9 +242,10 @@ impl App {
             Screen::Lava(l) => {
                 if let Some(bot) = self.bot.as_mut().filter(|_| !picking) {
                     bot.drive_lava(l, now);
-                    if l.test
-                        .finished
-                        .is_some_and(|f| now - f > Duration::from_secs(4))
+                    if touring
+                        && l.test
+                            .finished
+                            .is_some_and(|f| now - f > Duration::from_secs(4))
                     {
                         next = Some(practice(l.test.mode, l.test.start_level));
                     }
@@ -293,7 +297,7 @@ impl App {
         if let (Some(p), Some(t)) = (&self.pick, self.screen.test()) {
             menu::pick(f, p, t.mode, &self.bests, now);
         }
-        if self.bot.is_some() {
+        if self.bot.as_ref().is_some_and(|b| b.tour) {
             f.render_widget(Line::from(" DEMO ").black().on_magenta().bold(), f.area());
         }
         crate::theme::apply(f.buffer_mut());
@@ -347,20 +351,44 @@ fn practice(mode: Mode, start: u32) -> Screen {
     Screen::Practice(t)
 }
 
-/// Dev autopilot (`--demo` / `?demo`): types whatever test is on screen,
-/// ramping 40 → 180 wpm with occasional fixed typos, so every rank and
-/// effect shows up.
-struct Bot {
+/// The autopilot: types whatever test is on screen with occasional fixed
+/// typos, speeding up as it goes so every rank and effect shows up.
+/// `--demo` / `?demo` is the full tour (40 → 180 wpm, it also swipes the menu,
+/// picks levels and restarts); `--autopilot [wpm]` only types, at `wpm`,
+/// leaving the menus to you, or to a recording script (see `demo/`).
+pub struct Bot {
     next: Instant,
     fixing: bool,
+    /// Typing speed at the start of each test.
+    wpm: f64,
+    /// Also drive the menus (the self-running demo).
+    tour: bool,
+    /// Chance of a (fixed) typo per key.
+    typos: f64,
 }
 
 impl Bot {
-    fn new() -> Self {
+    pub fn tour() -> Self {
+        Bot {
+            typos: 0.015,
+            ..Bot::typist(40.0).touring()
+        }
+    }
+
+    pub fn typist(wpm: f64) -> Self {
         Bot {
             next: Instant::now(),
             fixing: false,
+            wpm,
+            tour: false,
+            // rare enough that a recording's run climbs to reaper, but the
+            // odd combo shatter still shows
+            typos: 0.004,
         }
+    }
+
+    fn touring(self) -> Self {
+        Bot { tour: true, ..self }
     }
 
     fn drive(&mut self, t: &mut Test, now: Instant) {
@@ -374,13 +402,13 @@ impl Bot {
             if self.fixing {
                 t.backspace(at);
                 self.fixing = false;
-            } else if rng.random_bool(0.015) {
+            } else if rng.random_bool(self.typos) {
                 t.type_char('#', at);
                 self.fixing = true;
             } else if let Some(&c) = t.target.get(t.typed.len()) {
                 t.type_char(c, at);
             }
-            self.next = after(t, at);
+            self.next = self.after(t, at);
         }
     }
 
@@ -394,13 +422,17 @@ impl Bot {
             if let Some(c) = l.next_char() {
                 l.key(c, at);
             }
-            self.next = after(&l.test, at);
+            self.next = self.after(&l.test, at);
         }
     }
-}
 
-/// When the autopilot's next key falls: 40 → 180 wpm over the run, jittered.
-fn after(t: &Test, at: Instant) -> Instant {
-    let wpm = (40.0 + 8.0 * t.elapsed(at).as_secs_f64()).min(180.0);
-    at + Duration::from_secs_f64(12.0 / wpm * rand::rng().random_range(0.7..1.3))
+    /// When the next key falls, jittered: the tour speeds up from `wpm` (+8 a
+    /// second, to 140 more, at most 200) so every rank shows; the typist keeps
+    /// to `wpm`, so a recording gets the pace it asked for.
+    fn after(&self, t: &Test, at: Instant) -> Instant {
+        let ramp =
+            (self.wpm + 8.0 * t.elapsed(at).as_secs_f64()).min((self.wpm + 140.0).min(200.0));
+        let wpm = if self.tour { ramp } else { self.wpm };
+        at + Duration::from_secs_f64(12.0 / wpm * rand::rng().random_range(0.7..1.3))
+    }
 }

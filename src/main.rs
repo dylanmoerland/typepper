@@ -10,7 +10,7 @@ mod store;
 mod theme;
 mod ui;
 
-use app::{App, Key};
+use app::{App, Bot, Key};
 use web_time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -28,13 +28,44 @@ fn main() -> std::io::Result<()> {
                 .is_ok_and(|m| m == terminal_colorsaurus::ThemeMode::Light);
     theme::set_light(light);
 
-    let mut app = App::new(flag("--demo"));
+    // --autopilot [wpm]: only types (for recording GIFs, see demo/)
+    let autopilot = args.iter().position(|a| a == "--autopilot").map(|i| {
+        let wpm = args.get(i + 1).and_then(|w| w.parse().ok());
+        Bot::typist(wpm.unwrap_or(120.0))
+    });
+    let mut app = App::new(autopilot.or(flag("--demo").then(Bot::tour)));
+    // --fps N: frame cap. ~120 by default; recordings use less, since a
+    // recording terminal can't draw full-screen flames that fast (see demo/)
+    let fps: f64 = args
+        .iter()
+        .position(|a| a == "--fps")
+        .and_then(|i| args.get(i + 1)?.parse().ok())
+        .unwrap_or(120.0);
+    let frame = Duration::from_secs_f64(1.0 / fps.max(1.0));
+    // --script "2:right 3:left 4:enter": keys pressed at those seconds, so a
+    // recording can drive the menus on its own (see demo/record.sh)
+    let mut script: Vec<(f64, Key)> = args
+        .iter()
+        .position(|a| a == "--script")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.split_whitespace().filter_map(scripted).rev().collect())
+        .unwrap_or_default();
+    let began = Instant::now();
     ratatui::run(|terminal| {
         loop {
+            while script
+                .last()
+                .is_some_and(|(at, _)| began.elapsed().as_secs_f64() >= *at)
+            {
+                let (_, key) = script.pop().unwrap();
+                if app.key(key) {
+                    return Ok(());
+                }
+            }
             terminal.draw(|f| app.draw(f))?;
-            // ~120fps for timers/effects (a frame draws in well under 1ms, and
+            // one frame per `frame` (a frame draws in well under 1ms, and
             // terminals on 120Hz screens show it); a keypress wakes poll at once
-            if event::poll(Duration::from_millis(8))?
+            if event::poll(frame)?
                 && let Event::Key(k) = event::read()?
                 && k.kind == KeyEventKind::Press
             {
@@ -61,6 +92,25 @@ fn main() -> std::io::Result<()> {
             app.tick(Instant::now());
         }
     })
+}
+
+/// One `--script` step, "seconds:key" (a key name, or a single character).
+#[cfg(not(target_arch = "wasm32"))]
+fn scripted(step: &str) -> Option<(f64, Key)> {
+    let (at, name) = step.split_once(':')?;
+    let key = match name {
+        "esc" => Key::Esc,
+        "tab" => Key::Tab,
+        "enter" => Key::Enter,
+        "left" => Key::Left,
+        "right" => Key::Right,
+        "up" => Key::Up,
+        "down" => Key::Down,
+        "backspace" => Key::Backspace,
+        "space" => Key::Char(' '),
+        _ => Key::Char(name.chars().next()?),
+    };
+    Some((at.parse().ok()?, key))
 }
 
 /// Browser entry: waits for the chosen web font, then starts the game.
@@ -111,7 +161,7 @@ fn start(font: &'static str) -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|w| w.match_media("(pointer: coarse)").ok().flatten())
         .is_some_and(|m| m.matches());
     settings::set_touch(coarse || query.contains("touch"));
-    let app = Rc::new(RefCell::new(App::new(demo)));
+    let app = Rc::new(RefCell::new(App::new(demo.then(Bot::tour))));
 
     // dynamic atlas rasterizes any glyph (blocks, faces, sparks) from the font stack
     let system = ["Menlo", "Consolas", "DejaVu Sans Mono", "monospace"];
