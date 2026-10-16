@@ -2,6 +2,7 @@ mod app;
 mod best;
 mod engine;
 mod fx;
+mod lava;
 mod menu;
 mod pepper;
 mod settings;

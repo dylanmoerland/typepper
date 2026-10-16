@@ -11,6 +11,17 @@ pub enum Mode {
     Zen,
     /// Endless words on a fuel clock that drains faster every level.
     Survival,
+    /// Words fall toward rising lava; type them before they land (see `lava.rs`).
+    Lava(Aim),
+}
+
+/// How FLOOR IS LAVA picks the word you're typing.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Aim {
+    /// The first letter locks onto the lowest word starting with it.
+    Lock,
+    /// Words clear as soon as what you've typed spells one.
+    Free,
 }
 
 impl Default for Mode {
@@ -26,6 +37,8 @@ impl fmt::Display for Mode {
             Mode::Words(n) => write!(f, "{n}w"),
             Mode::Zen => write!(f, "zen"),
             Mode::Survival => write!(f, "survival"),
+            Mode::Lava(Aim::Lock) => write!(f, "lock-on"),
+            Mode::Lava(Aim::Free) => write!(f, "free"),
         }
     }
 }
@@ -240,14 +253,7 @@ impl Test {
                 self.word_from = (i + 1, self.score, self.errors);
             }
         } else {
-            self.last_points = 0;
-            if self.combo >= 20 {
-                self.broke = Some((self.combo, now));
-            }
-            self.heat *= MISS_KEEP;
-            self.errors += 1;
-            self.combo = 0;
-            self.last_error = Some(now);
+            self.missed(now);
         }
         self.last_key = Some(now);
         self.update_rank(now);
@@ -256,6 +262,8 @@ impl Test {
         match self.mode {
             Mode::Words(_) if self.typed.len() == self.target.len() => self.finish(now),
             Mode::Words(_) => {}
+            // lava feeds the text itself, one hit at a time
+            Mode::Lava(_) => {}
             // the rest never run out of words: keep a few lines queued
             _ if self.target.len() - self.typed.len() < 400 => {
                 self.target.push(' ');
@@ -263,6 +271,40 @@ impl Test {
             }
             _ => {}
         }
+    }
+
+    /// A wrong key that doesn't move the cursor (lava: no word to type it into).
+    pub fn miss(&mut self, now: Instant) {
+        if self.finished.is_some() {
+            return;
+        }
+        self.started.get_or_insert(now);
+        self.cool(now);
+        self.keystrokes += 1;
+        self.missed(now);
+        self.last_key = Some(now);
+        self.update_rank(now);
+    }
+
+    /// Lose the combo and some heat without a keystroke (lava: a word landed).
+    pub fn burn(&mut self, now: Instant) {
+        self.break_combo(now);
+        self.update_rank(now);
+    }
+
+    fn missed(&mut self, now: Instant) {
+        self.last_points = 0;
+        self.break_combo(now);
+        self.errors += 1;
+        self.last_error = Some(now);
+    }
+
+    fn break_combo(&mut self, now: Instant) {
+        if self.combo >= 20 {
+            self.broke = Some((self.combo, now));
+        }
+        self.heat *= MISS_KEEP;
+        self.combo = 0;
     }
 
     pub fn backspace(&mut self, now: Instant) {

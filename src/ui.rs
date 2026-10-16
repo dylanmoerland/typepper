@@ -152,6 +152,8 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
             }
             Mode::Zen => format!("{} words", t.words).yellow(),
             Mode::Survival => fuel_gauge(t, fx::fuel_beat(t, now)),
+            // lava draws its own screen (see `lava.rs`)
+            Mode::Lava(_) => format!("{} words", t.words).yellow(),
         };
         let stats = Line::from(vec![
             progress.bold(),
@@ -331,7 +333,7 @@ fn fuel_gauge(t: &Test, beat: f64) -> Span<'static> {
 }
 
 /// Heat gauge colored by the rank each segment belongs to, plus a Scoville readout.
-fn heat_bar(heat: f64, rank: usize, width: usize) -> Line<'static> {
+pub fn heat_bar(heat: f64, rank: usize, width: usize) -> Line<'static> {
     let w = width.saturating_sub(16).max(1);
     let mut spans: Vec<Span> = (0..w)
         .map(|j| {
@@ -612,7 +614,7 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     f.render_widget(chart_widget, chart);
 
     let mode = match t.mode {
-        Mode::Survival => format!("SURVIVAL lv{}", t.level()),
+        Mode::Survival | Mode::Lava(_) => format!("{} lv{}", menu::label(t.mode), t.level()),
         m => menu::label(m),
     };
     let line = format!(

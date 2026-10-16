@@ -53,7 +53,7 @@ impl Bests {
     pub fn record(&mut self, t: &Test, now: Instant) -> Option<Outcome> {
         let value = match t.mode {
             Mode::Zen => return None,
-            Mode::Survival => t.words as f64,
+            Mode::Survival | Mode::Lava(_) => t.words as f64,
             _ => t.wpm(now).round(),
         };
         let out = Outcome {
@@ -72,7 +72,7 @@ impl Bests {
 /// "87 wpm", "42 words".
 pub fn show(m: Mode, v: f64) -> String {
     match m {
-        Mode::Survival => format!("{v:.0} words"),
+        Mode::Survival | Mode::Lava(_) => format!("{v:.0} words"),
         _ => format!("{v:.0} wpm"),
     }
 }

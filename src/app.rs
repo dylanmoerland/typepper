@@ -12,6 +12,7 @@ use web_time::Instant;
 
 use crate::best::{Bests, Outcome};
 use crate::engine::{Mode, Test, random_words};
+use crate::lava::{self, Lava};
 use crate::menu::{self, Dialog, Menu};
 use crate::settings::{ROWS, Settings};
 use crate::ui;
@@ -34,6 +35,7 @@ pub enum Key {
 enum Screen {
     Title,
     Practice(Test),
+    Lava(Lava),
 }
 
 pub struct App {
@@ -132,6 +134,13 @@ impl App {
             (Screen::Title, Key::Down) => self.menu.length(1, now),
             (Screen::Title, Key::Enter | Key::Char(' ')) => self.menu.press(now),
             (Screen::Title, _) => {}
+            (Screen::Lava(l), key) => match key {
+                Key::Tab => next = Some(practice(l.test.mode)),
+                Key::Enter if l.test.finished.is_some() => next = Some(practice(l.test.mode)),
+                Key::Backspace => l.backspace(),
+                Key::Char(c) => l.key(c, now),
+                _ => {}
+            },
             (Screen::Practice(test), key) => match key {
                 Key::Tab => {
                     instant = test.finished.is_none();
@@ -178,16 +187,23 @@ impl App {
                     }
                 }
                 test.tick(now);
-                // finished: dissolve into results, and score it (demo runs don't count)
-                if let Some(end) = test.finished
-                    && !self.scored
-                {
-                    self.scored = true;
-                    self.fade = self.frame.take().map(|b| (b, now));
-                    if self.bot.is_none() {
-                        self.outcome = self.bests.record(test, end);
-                    }
-                }
+            }
+            Screen::Lava(l) => l.tick(now),
+        }
+        // finished: dissolve into results, and score it (demo runs don't count)
+        let test = match &self.screen {
+            Screen::Practice(t) => Some(t),
+            Screen::Lava(l) => Some(&l.test),
+            Screen::Title => None,
+        };
+        if let Some(test) = test
+            && let Some(end) = test.finished
+            && !self.scored
+        {
+            self.scored = true;
+            self.fade = self.frame.take().map(|b| (b, now));
+            if self.bot.is_none() {
+                self.outcome = self.bests.record(test, end);
             }
         }
         if let Some(s) = next {
@@ -205,6 +221,8 @@ impl App {
                 }
             }
             Screen::Practice(test) => ui::draw(f, test, self.outcome),
+            Screen::Lava(l) if l.test.finished.is_some() => ui::draw(f, &l.test, self.outcome),
+            Screen::Lava(l) => lava::draw(f, l, now),
         }
         if self.bot.is_some() {
             f.render_widget(Line::from(" DEMO ").black().on_magenta().bold(), f.area());
@@ -238,6 +256,9 @@ fn reload() {
 }
 
 fn practice(mode: Mode) -> Screen {
+    if let Mode::Lava(aim) = mode {
+        return Screen::Lava(Lava::new(aim));
+    }
     // only word tests end on their own text; the rest stream more in as you type
     let n = match mode {
         Mode::Words(n) => n,

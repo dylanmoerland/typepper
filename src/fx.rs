@@ -38,7 +38,7 @@ fn pepper_body(t: &Test) -> Color {
 use crate::settings::calm;
 
 /// Clipped write: effects can wander off-screen without panicking.
-fn put(buf: &mut Buffer, x: i32, y: i32, sym: &str, style: Style) {
+pub fn put(buf: &mut Buffer, x: i32, y: i32, sym: &str, style: Style) {
     let a = buf.area;
     if (a.left() as i32..a.right() as i32).contains(&x)
         && (a.top() as i32..a.bottom() as i32).contains(&y)
@@ -348,7 +348,7 @@ const STREAK: u32 = 10; // combo where the caret catches fire
 const SHATTER: f64 = 0.9;
 
 /// Draw unless the cell holds a letter: effects pass behind the typing text.
-fn put_behind(buf: &mut Buffer, x: i32, y: i32, sym: &str, style: Style) {
+pub fn put_behind(buf: &mut Buffer, x: i32, y: i32, sym: &str, style: Style) {
     let a = buf.area;
     if (a.left() as i32..a.right() as i32).contains(&x)
         && (a.top() as i32..a.bottom() as i32).contains(&y)

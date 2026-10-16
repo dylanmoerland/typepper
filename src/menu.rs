@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Widget};
 use web_time::Instant;
 
 use crate::best::{self, Bests};
-use crate::engine::Mode;
+use crate::engine::{Aim, Mode};
 use crate::fx::{Rgb, WHITE, blur, fire, hash, lerp, mix, page_rgb, rank_color};
 use crate::settings::{ROWS, Row, Settings};
 use crate::{pepper, theme, ui};
@@ -26,7 +26,7 @@ pub struct Group {
     modes: &'static [Mode],
 }
 
-pub const MENU: [Group; 4] = [
+pub const MENU: [Group; 5] = [
     Group {
         name: "SPRINT",
         blurb: "type the words, fast as you can",
@@ -55,6 +55,13 @@ pub const MENU: [Group; 4] = [
         scene: survival,
         modes: &[Mode::Survival],
     },
+    Group {
+        name: "FLOOR IS LAVA",
+        blurb: "type the words before they hit the lava",
+        color: (255, 110, 20),
+        scene: lava,
+        modes: &[Mode::Lava(Aim::Lock), Mode::Lava(Aim::Free)],
+    },
 ];
 
 pub fn group(m: Mode) -> &'static Group {
@@ -63,6 +70,7 @@ pub fn group(m: Mode) -> &'static Group {
         Mode::Time(_) => 1,
         Mode::Zen => 2,
         Mode::Survival => 3,
+        Mode::Lava(_) => 4,
     }]
 }
 
@@ -101,7 +109,7 @@ pub struct Menu {
     /// When the last swipe started (or the menu was entered).
     at: Instant,
     /// Chosen length per group.
-    len: [usize; 4],
+    len: [usize; MENU.len()],
     /// Last length change on the selected card: from which option, when.
     chip: (usize, Option<Instant>),
     /// Enter was pressed: the card squeezes, then the test starts.
@@ -116,7 +124,7 @@ impl Menu {
             target: 1,
             from: 1.0,
             at: now,
-            len: [1, 1, 0, 0],
+            len: [1, 1, 0, 0, 0],
             chip: (0, None),
             pressed: None,
             born: now,
@@ -184,7 +192,7 @@ impl Menu {
 
     /// Demo: swiped all the way round, back on the starting card.
     pub fn lap_done(&self) -> bool {
-        self.target >= 5
+        self.target > MENU.len() as i64
     }
 
     /// Back from a test: same card, its title decodes in again.
@@ -321,7 +329,13 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
     for (j, w) in [(i, 1.0 - k), (i + 1, k)] {
         // calm: the scenery stays still (it's all screen-wide motion)
         if w > 0.01 && !crate::settings::calm() {
-            (MENU[j.rem_euclid(4) as usize].scene)(f.buffer_mut(), area, focus, secs, w);
+            (MENU[j.rem_euclid(MENU.len() as i64) as usize].scene)(
+                f.buffer_mut(),
+                area,
+                focus,
+                secs,
+                w,
+            );
         }
     }
 
@@ -397,7 +411,9 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant,
     // gone within one slot either way, however wide the screen
     let falloff = (area.width as f64 / 2.0 - big / 2.0).clamp(8.0, gap);
     for (i, g) in MENU.iter().enumerate() {
-        let d = (i as f64 - s + 2.0).rem_euclid(4.0) - 2.0; // −2..2, wraps around
+        // offset from the middle, wrapped to ±n/2
+        let n = MENU.len() as f64;
+        let d = (i as f64 - s + n / 2.0).rem_euclid(n) - n / 2.0;
         // cards shrink away from the middle, so they grow as they slide in
         let k = d.abs().min(1.0);
         // enter squeezes the selected card in and lets it spring back
@@ -410,7 +426,7 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant,
         let w = (big + (small - big) * k - 4.0 * sq).round() as u16;
         let h = (area.height as f64 - 2.0 * k - 2.0 * sq).round() as u16;
         let x = (mid + d * gap - w as f64 / 2.0).round() as i32;
-        // only the middle card and one either side (−2 has no mirror at +2)
+        // only the middle card and one either side
         if d.abs() >= 1.75 || x + w as i32 <= area.x as i32 || x >= area.right() as i32 {
             continue;
         }
@@ -818,6 +834,53 @@ fn survival(buf: &mut Buffer, area: Rect, _focus: Rect, secs: f64, w: f64) {
     }
 }
 
+/// FLOOR IS LAVA: words drift down into a bubbling pool along the bottom.
+fn lava(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
+    const WORDS: [&str; 6] = ["chili", "heat", "salsa", "spice", "pepper", "sauce"];
+    let h = area.height as f64;
+    let pool = (h * 0.12 * w).round() as u16;
+    for n in 0..(area.width / 9) as u64 {
+        if !lane_on(hash(n, 52, 0), w) {
+            continue;
+        }
+        let seed = hash(n, 51, 0) as f64;
+        let word = WORDS[n as usize % WORDS.len()];
+        let fall = h - pool as f64;
+        let y = (secs * (1.0 + seed / 255.0) + seed) % fall.max(1.0);
+        let x = area.x as i32 + (n * 9) as i32 + (hash(n, 53, 0) % 3) as i32;
+        let row = area.y + y as u16;
+        if (focus.top()..focus.bottom()).contains(&row) {
+            continue; // behind the cards: letters there would read as loose card text
+        }
+        let near = y / fall; // words glow hotter as they near the lava
+        let c = mix((150, 150, 150), (255, 110, 40), near * near);
+        for (j, ch) in word.chars().enumerate() {
+            dab(
+                buf,
+                x + j as i32,
+                area.y as i32 + y as i32,
+                &ch.to_string(),
+                c,
+                0.55 * w,
+            );
+        }
+    }
+    for up in 0..pool {
+        let y = area.bottom() - 1 - up;
+        for x in area.left()..area.right() {
+            let n = hash(x as u64, y as u64, (secs * 6.0) as u64) as f64 / 255.0;
+            let sym = match up + 1 == pool {
+                true if ((x as f64 * 0.5 + secs * 3.0).sin()) > 0.0 => "~",
+                true => "≈",
+                false => ["▓", "▒", "▓", "█"][(n * 3.99) as usize],
+            };
+            buf[(x, y)]
+                .set_symbol(sym)
+                .set_fg(fire((0.5 + 0.4 * n) * w));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -838,15 +901,20 @@ mod tests {
         assert_eq!((m.sel(), m.mode()), (1, Mode::Time(30)));
         m.swipe(-1, t0);
         m.swipe(-1, t0);
-        assert_eq!(m.sel(), 3, "wraps past the first card");
+        assert_eq!(m.sel(), 4, "wraps past the first card");
+        assert_eq!(m.mode(), Mode::Lava(Aim::Lock));
+        m.length(1, t0);
+        assert_eq!(m.mode(), Mode::Lava(Aim::Free));
+        m.swipe(-1, t0);
         m.length(1, t0);
         assert_eq!(m.mode(), Mode::Survival, "single-length modes stay put");
         let done = t0 + Duration::from_secs(1);
-        assert_eq!(m.scroll(done), -1.0);
+        assert_eq!(m.scroll(done), -2.0);
         assert!(
-            m.scroll(t0 + Duration::from_millis(200)) < -1.0,
+            m.scroll(t0 + Duration::from_millis(200)) < -2.0,
             "overshoots"
         );
+        m.swipe(1, done);
         m.swipe(1, done);
         m.length(-1, done);
         assert_eq!(m.mode(), Mode::Words(10), "back on sprint, shortest");

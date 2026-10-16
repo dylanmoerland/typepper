@@ -4,6 +4,8 @@ What changed in each typepper release, newest first.
 
 ## Unreleased
 
+- New mode, FLOOR IS LAVA: words fall toward rising lava, so type them before they land. Pick lock-on (your first letter locks onto a word) or free (any word you spell clears)
+- Play on your phone: tap to play, swipe to pick a mode, and type with your phone's keyboard
 - typepper.com gets link previews and a GitHub link in the footer
 
 ## [0.1.0] - 2026-10-16
