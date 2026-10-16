@@ -376,6 +376,8 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
 /// Each card is drawn into its own buffer, then copied over clipped, so cards
 /// can hang off either edge of the screen.
 const CARD_W: u16 = 46;
+/// Most focus a card one slot off the middle keeps (1 − this): shade blocks, no letters.
+const SIDE_BLUR: f64 = 0.55;
 /// Side cards' size relative to the middle one.
 const SIDE: f64 = 0.7;
 /// The middle card's border glints white as it lands, then cools to its color.
@@ -413,10 +415,13 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant,
         let mode = g.modes[m.len[i]];
         let best = bests.get(mode).map(|v| best::show(mode, v));
         draw_card(&mut card, m, i, best, now, secs);
-        // sharp inside the middle slot, defocusing toward the screen edges
+        // sharp inside the middle slot, defocusing toward the screen edges;
+        // a side card is capped as a whole, so its inner edge can't stay
+        // readable while the rest is blocks (it sharpens as it slides in)
+        let cap = 1.0 - SIDE_BLUR * d.abs();
         blit(buf, &card, x, area.y + (area.height - h) / 2, |sx| {
             let off = (sx as f64 + 0.5 - mid).abs() - big / 2.0 - 1.0;
-            1.0 - off.max(0.0) / falloff
+            (1.0 - off.max(0.0) / falloff).min(cap)
         });
     }
     hints(buf, area, m, mid - big / 2.0, mid + big / 2.0, now, secs);
