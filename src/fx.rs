@@ -381,7 +381,9 @@ pub fn slam(buf: &mut Buffer, t: &Test, now: Instant, sky: Rect) {
     let w = rows[0].chars().count() * scale;
     let x0 = sky.x as i32 + (sky.width as i32 - w as i32) / 2;
     let y0 = sky.y as i32 + (sky.height as i32 - 5 * scale as i32) / 2;
-    let style = Style::new().fg(Color::Rgb(c.0, c.1, c.2)).bg(Color::Rgb(c.0, c.1, c.2));
+    let style = Style::new()
+        .fg(Color::Rgb(c.0, c.1, c.2))
+        .bg(Color::Rgb(c.0, c.1, c.2));
     for (r, row) in rows.iter().enumerate() {
         for (col, ch) in row.chars().enumerate() {
             if ch == ' ' {
@@ -413,7 +415,11 @@ pub fn caret_flame(buf: &mut Buffer, t: &Test, now: Instant, caret: (u16, u16)) 
     }
     let h = 1 + (t.combo / 40).min(2) as i32;
     for k in 0..h {
-        let sway = if k == 0 { 0 } else { (noise(k as u64) * 2.99) as i32 - 1 };
+        let sway = if k == 0 {
+            0
+        } else {
+            (noise(k as u64) * 2.99) as i32 - 1
+        };
         let v = 1.0 - k as f64 / h as f64 * 0.6 - noise(k as u64 + 5) * 0.2;
         let sym = ["▲", "^", "'"][k as usize];
         let (x, y) = (caret.0 as i32 + sway, caret.1 as i32 - 1 - k);
@@ -458,7 +464,199 @@ pub fn shatter(buf: &mut Buffer, t: &Test, now: Instant, at: Rect) {
     }
 }
 
+// ── keystrokes & words ──────────────────────────────────────────────────
+
+const POP: f64 = 0.08; // correct key flash
+const MISS: f64 = 0.12; // wrong key shake
+const CRUMB: f64 = 0.45; // backspaced letter falling away
+const WORD_SWEEP: f64 = 0.16;
+const SPARKLE: f64 = 0.4;
+const POPUP: f64 = 0.7; // +points floating up
+pub const PUNCH: f64 = 0.3; // multiplier step
+
+/// Every correct key pops: its cell flashes in the rank color, then settles.
+pub fn key_pop(
+    buf: &mut Buffer,
+    t: &Test,
+    now: Instant,
+    pos: impl Fn(usize) -> Option<(u16, u16)>,
+) {
+    let page = page_rgb();
+    let flash = mix(page, mix(RANK_RGB[t.rank], WHITE, 0.2), 0.55);
+    for &(at, i) in t.hits.iter().rev() {
+        let age = since(Some(at), now).as_secs_f64();
+        if age > POP {
+            break;
+        }
+        if let Some(p) = pos(i) {
+            buf[p].set_bg(lerp(flash, page, age / POP));
+        }
+    }
+}
+
+/// A wrong key: the letter you missed shakes in place and the caret blinks red.
+pub fn miss_shake(
+    buf: &mut Buffer,
+    t: &Test,
+    now: Instant,
+    pos: impl Fn(usize) -> Option<(u16, u16)>,
+    caret: (u16, u16),
+) {
+    let age = since(t.last_error, now).as_secs_f64();
+    if age >= MISS {
+        return;
+    }
+    if buf.area.contains(caret.into()) {
+        buf[caret].set_bg(Color::Rgb(200, 30, 30));
+    }
+    let Some(i) = t.typed.len().checked_sub(1) else {
+        return;
+    };
+    let dx = [1, -1, 1, 0][((age / MISS * 4.0) as usize).min(3)];
+    if t.typed[i] == t.target[i] || dx == 0 {
+        return; // already fixed, or at rest
+    }
+    let Some((x, y)) = pos(i) else { return };
+    let cell = buf[(x, y)].clone();
+    buf[(x, y)].set_symbol(" ");
+    put(buf, x as i32 + dx, y as i32, cell.symbol(), cell.style());
+}
+
+/// Backspaced letters pop up out of the line and fade (red if they were
+/// wrong), over the typed text rather than the text still to come.
+pub fn crumbs(buf: &mut Buffer, t: &Test, now: Instant, pos: impl Fn(usize) -> Option<(u16, u16)>) {
+    let page = page_rgb();
+    for &(at, i, c) in t.erased.iter().rev() {
+        let age = since(Some(at), now).as_secs_f64();
+        if age > CRUMB {
+            break;
+        }
+        let Some((x, y)) = pos(i) else { continue };
+        if c == ' ' {
+            continue;
+        }
+        let k = age / CRUMB;
+        let base = if t.target.get(i) == Some(&c) {
+            (200, 200, 200)
+        } else {
+            (255, 70, 60)
+        };
+        let drift = if hash(i as u64, 3, 1).is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        let (cx, cy) = (
+            x as f64 + drift * k * 1.5,
+            y as f64 - 1.0 - 2.5 * k + 1.5 * k * k,
+        );
+        let style = Style::new().fg(lerp(base, page, k));
+        put(
+            buf,
+            cx.round() as i32,
+            cy.round() as i32,
+            &c.to_string(),
+            style,
+        );
+    }
+}
+
+/// A finished word: a bright head sweeps across it; clean words throw a
+/// sparkle up off their last letter.
+pub fn word_sweep(
+    buf: &mut Buffer,
+    t: &Test,
+    now: Instant,
+    pos: impl Fn(usize) -> Option<(u16, u16)>,
+) {
+    let page = page_rgb();
+    let rgb = mix(RANK_RGB[t.rank.max(2)], WHITE, 0.2);
+    for w in t.words_done.iter().rev() {
+        let age = since(Some(w.at), now).as_secs_f64();
+        if age > SPARKLE {
+            break;
+        }
+        let len = w.end.saturating_sub(w.start);
+        if age < WORD_SWEEP && len > 0 {
+            let head = w.start + ((age / WORD_SWEEP) * len as f64) as usize;
+            for i in w.start..=head.min(w.end - 1) {
+                let Some(p) = pos(i) else { continue };
+                let style = match head - i {
+                    0 => Style::new()
+                        .fg(Color::Black)
+                        .bg(Color::Rgb(rgb.0, rgb.1, rgb.2)),
+                    1 | 2 => Style::new().fg(Color::White).bold(),
+                    _ => continue,
+                };
+                buf[p].set_style(style);
+            }
+        }
+        if w.clean
+            && let Some((x, y)) = pos(w.end - 1)
+        {
+            let k = age / SPARKLE;
+            let sym = if k < 0.5 { "✦" } else { "·" };
+            put_behind(
+                buf,
+                x as i32 + 1,
+                y as i32 - 1 - (k * 2.0) as i32,
+                sym,
+                Style::new().fg(lerp(WHITE, page, k)),
+            );
+        }
+    }
+}
+
+/// +points float up off each finished word.
+pub fn points(buf: &mut Buffer, t: &Test, now: Instant, pos: impl Fn(usize) -> Option<(u16, u16)>) {
+    let page = page_rgb();
+    let rgb = mix(RANK_RGB[t.rank.max(2)], WHITE, 0.4);
+    for w in t.words_done.iter().rev() {
+        let age = since(Some(w.at), now).as_secs_f64();
+        if age > POPUP {
+            break;
+        }
+        let Some((x, y)) = pos((w.start + w.end) / 2) else {
+            continue;
+        };
+        let text = format!("+{}", w.points);
+        let k = age / POPUP;
+        let (x0, y0) = (
+            x as i32 - text.len() as i32 / 2,
+            y as i32 - 1 - (k * 2.5) as i32,
+        );
+        let style = Style::new().fg(lerp(rgb, page, k * k)).bold();
+        for (j, ch) in text.chars().enumerate() {
+            put(buf, x0 + j as i32, y0, &ch.to_string(), style);
+        }
+    }
+}
+
+/// The multiplier stepping up: a ring of dust bursts out around `at`.
+pub fn mult_punch(buf: &mut Buffer, t: &Test, now: Instant, at: (u16, u16)) {
+    let age = since(t.mult_up, now).as_secs_f64();
+    if age >= PUNCH {
+        return;
+    }
+    let k = age / PUNCH;
+    let r = 1.0 + 3.0 * k;
+    let style = Style::new().fg(lerp(WHITE, page_rgb(), k));
+    for step in 0..20 {
+        let a = step as f64 / 20.0 * 2.0 * PI;
+        let (x, y) = (at.0 as f64 + 2.0 * r * a.cos(), at.1 as f64 + r * a.sin());
+        put_behind(buf, x.round() as i32, y.round() as i32, "·", style);
+    }
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────
+
+/// The page color as RGB, for fading things into the background.
+pub fn page_rgb() -> Rgb {
+    match crate::theme::page() {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (0, 0, 0),
+    }
+}
 
 /// Seconds since the test started; drives every animation.
 pub fn anim_clock(t: &Test, now: Instant) -> f64 {

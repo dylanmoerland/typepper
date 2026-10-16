@@ -83,15 +83,13 @@ impl App {
                 next = Some(practice(self.menu.mode()));
             }
             (Screen::Title, _) => {}
-            (Screen::Practice(test), key) => {
-                match key {
-                    Key::Tab => next = Some(practice(test.mode)),
-                    Key::Enter if test.finished.is_some() => next = Some(practice(test.mode)),
-                    Key::Backspace => test.backspace(),
-                    Key::Char(c) => test.type_char(c, now),
-                    _ => {}
-                }
-            }
+            (Screen::Practice(test), key) => match key {
+                Key::Tab => next = Some(practice(test.mode)),
+                Key::Enter if test.finished.is_some() => next = Some(practice(test.mode)),
+                Key::Backspace => test.backspace(now),
+                Key::Char(c) => test.type_char(c, now),
+                _ => {}
+            },
         }
         if let Some(s) = next {
             self.go(s, now);
@@ -192,7 +190,7 @@ impl Bot {
         while self.next <= now && t.finished.is_none() {
             let at = self.next;
             if self.fixing {
-                t.backspace();
+                t.backspace(at);
                 self.fixing = false;
             } else if rng.random_bool(0.015) {
                 t.type_char('#', at);

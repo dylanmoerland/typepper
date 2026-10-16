@@ -13,7 +13,7 @@ use web_time::Instant;
 
 use crate::best::{self, Bests};
 use crate::engine::Mode;
-use crate::fx::{Rgb, WHITE, fire, hash, lerp, mix, rank_color};
+use crate::fx::{Rgb, WHITE, fire, hash, lerp, mix, page_rgb, rank_color};
 use crate::{pepper, theme, ui};
 
 pub struct Group {
@@ -623,13 +623,6 @@ fn survival(buf: &mut Buffer, area: Rect, _focus: Rect, secs: f64, w: f64) {
                     .set_fg(fire(v * w));
             }
         }
-    }
-}
-
-fn page_rgb() -> Rgb {
-    match theme::page() {
-        Color::Rgb(r, g, b) => (r, g, b),
-        _ => (0, 0, 0),
     }
 }
 

@@ -128,6 +128,18 @@ const REFILL: f64 = 1.5;
 const LEVEL_WORDS: u32 = 10;
 const DRAIN_STEP: f64 = 1.12;
 
+/// A word finished with a correct space (drives the word sweep and +points).
+pub struct WordDone {
+    pub at: Instant,
+    /// Target range `[start, end)`, without the space.
+    pub start: usize,
+    pub end: usize,
+    /// No misses while typing it.
+    pub clean: bool,
+    /// Score earned on it, space included.
+    pub points: u64,
+}
+
 /// One typing test. Pure state: every time-dependent call takes `now`.
 #[derive(Default)]
 pub struct Test {
@@ -163,6 +175,15 @@ pub struct Test {
     pub words: u32,
     /// Survival seconds left.
     pub fuel: f64,
+    pub words_done: Vec<WordDone>,
+    /// Backspaced chars: when, where, and what was typed there.
+    pub erased: Vec<(Instant, usize, char)>,
+    /// When the multiplier last stepped up.
+    pub mult_up: Option<Instant>,
+    /// Score the last keystroke earned (0 for a miss).
+    pub last_points: u64,
+    /// Where the current word starts, and the score and errors when it did.
+    word_from: (usize, u64, u32),
     /// Furthest the caret has been, so retyping a space doesn't refill twice.
     frontier: usize,
     last_tick: Option<Instant>,
@@ -191,19 +212,35 @@ impl Test {
                 (0.2 / now.saturating_duration_since(t).as_secs_f64().max(0.01)).clamp(0.5, 3.0)
             });
             self.heat = (self.heat + HEAT_GAIN * speed).min(100.0);
+            let mult = self.multiplier();
             self.combo += 1;
+            if self.multiplier() > mult {
+                self.mult_up = Some(now);
+            }
             self.best_combo = self.best_combo.max(self.combo);
             self.hits.push((now, self.typed.len()));
             if self.combo.is_multiple_of(50) {
                 self.milestone = Some((self.combo, now));
                 self.launch(now);
             }
-            if c == ' ' && self.typed.len() >= self.frontier {
+            self.last_points = 10 * self.multiplier() as u64 * (1 + self.rank as u64);
+            self.score += self.last_points;
+            let i = self.typed.len();
+            if c == ' ' && i >= self.frontier {
                 self.words += 1;
                 self.fuel = (self.fuel + REFILL).min(FUEL);
+                let (start, score, errors) = self.word_from;
+                self.words_done.push(WordDone {
+                    at: now,
+                    start,
+                    end: i,
+                    clean: self.errors == errors,
+                    points: self.score - score,
+                });
+                self.word_from = (i + 1, self.score, self.errors);
             }
-            self.score += 10 * self.multiplier() as u64 * (1 + self.rank as u64);
         } else {
+            self.last_points = 0;
             if self.combo >= 20 {
                 self.broke = Some((self.combo, now));
             }
@@ -228,9 +265,11 @@ impl Test {
         }
     }
 
-    pub fn backspace(&mut self) {
-        if self.finished.is_none() {
-            self.typed.pop();
+    pub fn backspace(&mut self, now: Instant) {
+        if self.finished.is_none()
+            && let Some(c) = self.typed.pop()
+        {
+            self.erased.push((now, self.typed.len(), c));
         }
     }
 
@@ -384,7 +423,7 @@ mod tests {
         let mut t = Test::new(Mode::Words(2), &["hello", "world"]);
         type_str(&mut t, "hellp", t0);
         assert_eq!((t.errors, t.combo, t.best_combo), (1, 0, 4));
-        t.backspace();
+        t.backspace(t0);
         type_str(&mut t, "o world", t0 + Duration::from_secs(6));
         let end = t.finished.expect("finished on last char");
         assert_eq!(t.correct(), 11);
@@ -415,12 +454,32 @@ mod tests {
     }
 
     #[test]
+    fn words_backspaces_and_steps_are_recorded() {
+        let t0 = Instant::now();
+        let mut t = Test::new(Mode::Words(3), &["ab", "cd", "ef"]);
+        type_str(&mut t, "ab cx", t0);
+        t.backspace(t0);
+        assert_eq!(t.erased.last().map(|e| (e.1, e.2)), Some((4, 'x')));
+        type_str(&mut t, "d ", t0);
+        let [first, second] = &t.words_done[..] else {
+            panic!("two words done")
+        };
+        assert_eq!((first.start, first.end, first.clean), (0, 2, true));
+        assert_eq!((second.start, second.end, second.clean), (3, 5, false));
+        assert_eq!(first.points, 30, "a, b, space at x1");
+        assert!(t.mult_up.is_none());
+        let mut t = Test::new(Mode::Time(60), &["a"; 30]);
+        type_steady(&mut t, 20, 200, t0);
+        assert!(t.mult_up.is_some(), "combo 20 steps to x2");
+    }
+
+    #[test]
     fn survival_refills_streams_and_runs_dry() {
         let t0 = Instant::now();
         let mut t = Test::new(Mode::Survival, &["ab"; 3]);
         type_str(&mut t, "ab ", t0);
         assert_eq!((t.words, t.fuel), (1, FUEL), "refill caps at full");
-        t.backspace();
+        t.backspace(t0);
         t.type_char(' ', t0);
         assert_eq!(t.words, 1, "retyping a space doesn't count again");
         assert!(t.target.len() > 100, "more words streamed in");

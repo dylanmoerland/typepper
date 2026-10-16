@@ -134,11 +134,19 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         ]);
         f.render_widget(stats, header);
     }
-    let score = Line::from(vec![
-        "SCORE ".dark_gray(),
-        t.score.to_string().fg(color).bold(),
-    ]);
-    f.render_widget(score.right_aligned(), header);
+    // odometer: the digits a keystroke changed flash as they tick over
+    let digits = t.score.to_string();
+    let prev = (t.score - t.last_points).to_string();
+    let pad = digits.len() - prev.len();
+    let ticking = since(t.last_key, now) < Duration::from_millis(100);
+    let mut score = vec!["SCORE ".dark_gray()];
+    score.extend(digits.char_indices().map(|(j, c)| {
+        let changed = ticking && (j < pad || prev.as_bytes()[j - pad] != digits.as_bytes()[j]);
+        c.to_string()
+            .fg(if changed { Color::White } else { color })
+            .bold()
+    }));
+    f.render_widget(Line::from(score).right_aligned(), header);
 
     // HUD: fighting-game combo counter left, pepper rank right
     let [combo_area, rank_area] = Layout::horizontal([Constraint::Fill(1); 2]).areas(hud);
@@ -155,7 +163,13 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         .map(|r| Line::from(solid(r, combo_color)))
         .collect();
     lines[1].push_span("  HITS".dark_gray());
-    lines[3].push_span(format!("  ×{}", t.multiplier()).fg(color).bold());
+    let punch = since(t.mult_up, now).as_secs_f64() < fx::PUNCH;
+    let mult_x = combo_area.x + lines[3].width() as u16 + 3; // the N in "  ×N"
+    lines[3].push_span(
+        format!("  ×{}", t.multiplier())
+            .fg(if punch { Color::White } else { color })
+            .bold(),
+    );
     if t.fever() {
         lines[3].push_span(
             " FEVER"
@@ -164,6 +178,7 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         );
     }
     f.render_widget(Paragraph::new(lines), combo_area);
+    fx::mult_punch(f.buffer_mut(), t, now, (mult_x, combo_area.y + 3));
 
     let mut rank_lines = vec![
         Line::from(""),
@@ -239,7 +254,14 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         caret: geom.pos(t.typed.len()).unwrap_or(geom.caret),
         ..geom
     };
-    fx::sparks(f.buffer_mut(), t, now, |i| geom.pos(i));
+    let pos = |i| geom.pos(i);
+    let buf = f.buffer_mut();
+    fx::key_pop(buf, t, now, pos);
+    fx::word_sweep(buf, t, now, pos);
+    fx::miss_shake(buf, t, now, pos, geom.caret);
+    fx::crumbs(buf, t, now, pos);
+    fx::sparks(buf, t, now, pos);
+    fx::points(buf, t, now, pos);
 
     f.render_widget(heat_bar(t.heat, t.rank, heat.width as usize), heat);
 
