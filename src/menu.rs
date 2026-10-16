@@ -12,7 +12,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Widget, Wra
 use web_time::Instant;
 
 use crate::best::{self, Bests};
-use crate::engine::{Aim, Mode};
+use crate::engine::{Aim, LEVELS, Mode};
 use crate::fx::{Rgb, WHITE, blur, fire, hash, lerp, mix, page_rgb, rank_color};
 use crate::settings::{ROWS, Row, Settings};
 use crate::{pepper, theme, ui};
@@ -115,6 +115,8 @@ pub struct Menu {
     at: Instant,
     /// Chosen length per group.
     len: [usize; MENU.len()],
+    /// Last starting level picked per card (index into `LEVELS`).
+    start: [usize; MENU.len()],
     /// Last length change on the selected card: from which option, when.
     chip: (usize, Option<Instant>),
     /// Enter was pressed: the card squeezes, then the test starts.
@@ -130,6 +132,7 @@ impl Menu {
             from: 1.0,
             at: now,
             len: [1, 1, 0, 0, 0],
+            start: [0; MENU.len()],
             chip: (0, None),
             pressed: None,
             born: now,
@@ -201,6 +204,15 @@ impl Menu {
     }
 
     /// Back from a test: same card, its title decodes in again.
+    /// The starting level last picked for `m`'s card (index into `LEVELS`).
+    pub fn start_of(&self, m: Mode) -> usize {
+        self.start[slot(m)]
+    }
+
+    pub fn set_start(&mut self, m: Mode, i: usize) {
+        self.start[slot(m)] = i;
+    }
+
     pub fn back(&mut self, now: Instant) {
         self.from = self.target as f64;
         self.at = now;
@@ -310,6 +322,91 @@ fn dim(buf: &mut Buffer, k: f64) {
             cell.fg = lerp((r, g, b), page, k);
         }
     }
+}
+
+/// The starting-level picker over a leveled game (survival, lava), before
+/// its first key: Tetris-style, so experienced typers can skip the warm-up.
+pub struct Pick {
+    pub choice: usize,
+    /// The chip slides from here.
+    from: usize,
+    moved: Option<Instant>,
+    opened: Instant,
+}
+
+impl Pick {
+    pub fn new(choice: usize, now: Instant) -> Self {
+        Pick {
+            choice,
+            from: choice,
+            moved: None,
+            opened: now,
+        }
+    }
+
+    pub fn step(&mut self, dir: i64, now: Instant) {
+        self.from = self.choice;
+        self.choice = (self.choice as i64 + dir).rem_euclid(LEVELS.len() as i64) as usize;
+        self.moved = Some(now);
+    }
+
+    /// Seconds since it opened (the demo autopilot confirms after a moment).
+    pub fn age(&self, now: Instant) -> f64 {
+        since(Some(self.opened), now)
+    }
+
+    fn chip_at(&self, now: Instant) -> f64 {
+        let k = since(self.moved, now) / CHIP;
+        let to = self.choice as f64;
+        match k < 1.0 {
+            true => self.from as f64 + (to - self.from as f64) * ease_out_back(k),
+            false => to,
+        }
+    }
+}
+
+/// How each starting level feels, in heat ranks (see `engine::RANKS`).
+const PICK_HEAT: [(&str, usize); 4] = [("mild", 1), ("medium", 3), ("hot", 4), ("extra hot", 6)];
+
+pub fn pick(f: &mut Frame, p: &Pick, mode: Mode, bests: &Bests, now: Instant) {
+    let area = f.area();
+    let k = (p.age(now) / POP).min(1.0);
+    dim(f.buffer_mut(), 0.6 * k);
+    let (r, g, b) = group(mode).color;
+    let color = Color::Rgb(r, g, b);
+    let h = 9.min(area.height);
+    let w = ((36.0 * (0.7 + 0.3 * ease_out_back(k))).round() as u16).min(area.width);
+    let rect = Rect::new(
+        area.x + (area.width - w) / 2,
+        area.y + (area.height - h) / 2,
+        w,
+        h,
+    );
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(color)
+        .title(Line::from(" START LEVEL ".bold()).centered());
+    let inner = block.inner(rect);
+    f.render_widget(Clear, rect);
+    f.render_widget(block, rect);
+    let row = |dy: u16| Rect::new(inner.x, inner.y + dy, inner.width, 1);
+    let labels: Vec<String> = LEVELS.iter().map(|l| format!("lv{l}")).collect();
+    options(f.buffer_mut(), row(1), &labels, p.chip_at(now), color);
+    let (heat, rank) = PICK_HEAT[p.choice];
+    f.render_widget(
+        Line::from(heat.fg(rank_color(rank)).bold()).centered(),
+        row(3),
+    );
+    let best = match bests.get(mode, LEVELS[p.choice]) {
+        Some(v) => format!("best {}", best::show(mode, v)),
+        None => "no best from here yet".to_string(),
+    };
+    f.render_widget(Line::from(best.dark_gray()).centered(), row(4));
+    let hint = match crate::settings::touch() {
+        true => "swipe pick · tap go · ✕ back",
+        false => "←/→ pick · enter go · esc back",
+    };
+    f.render_widget(Line::from(hint.dark_gray()).centered(), row(6));
 }
 
 /// Ease out with a slight overshoot (~6%) before settling.
@@ -457,7 +554,16 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant,
         }
         let mut card = Buffer::empty(Rect::new(0, 0, w, h));
         let mode = g.modes[m.len[i]];
-        let best = bests.get(mode).map(|v| best::show(mode, v));
+        // leveled modes show the best from the starting level last picked
+        let start = if mode.leveled() {
+            LEVELS[m.start[i]]
+        } else {
+            1
+        };
+        let best = bests.get(mode, start).map(|v| match start {
+            1 => best::show(mode, v),
+            _ => format!("{} · from lv{start}", best::show(mode, v)),
+        });
         draw_card(&mut card, m, i, best, now, secs);
         // sharp inside the middle slot, defocusing toward the screen edges;
         // a side card is capped as a whole, so its inner edge can't stay

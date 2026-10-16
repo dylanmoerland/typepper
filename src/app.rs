@@ -11,9 +11,9 @@ use ratatui::text::Line;
 use web_time::Instant;
 
 use crate::best::{Bests, Outcome};
-use crate::engine::{Mode, Test, random_words};
+use crate::engine::{LEVELS, Mode, Test, random_words};
 use crate::lava::{self, Lava};
-use crate::menu::{self, Dialog, Menu};
+use crate::menu::{self, Dialog, Menu, Pick};
 use crate::settings::{ROWS, Settings};
 use crate::ui;
 
@@ -47,6 +47,14 @@ impl Screen {
             Screen::Title => None,
         }
     }
+
+    fn test_mut(&mut self) -> Option<&mut Test> {
+        match self {
+            Screen::Practice(t) => Some(t),
+            Screen::Lava(l) => Some(&mut l.test),
+            Screen::Title => None,
+        }
+    }
 }
 
 pub struct App {
@@ -62,6 +70,8 @@ pub struct App {
     loaded: (usize, bool),
     /// The settings dialog, open over the menu.
     dialog: Option<Dialog>,
+    /// The starting-level picker, over a leveled game before it begins.
+    pick: Option<Pick>,
     /// The finished test's result against your best (once it's been scored).
     outcome: Option<Outcome>,
     scored: bool,
@@ -86,6 +96,7 @@ impl App {
             detected_light,
             loaded: (settings.font, crate::theme::is_light()),
             dialog: None,
+            pick: None,
             outcome: None,
             scored: false,
             since: now,
@@ -120,13 +131,28 @@ impl App {
             }
             return false;
         }
+        if let Some(p) = &mut self.pick {
+            match key {
+                Key::Left | Key::Up => p.step(-1, now),
+                Key::Right | Key::Down => p.step(1, now),
+                Key::Enter | Key::Char(' ') => self.start_from(),
+                Key::Esc => {
+                    self.menu.back(now);
+                    self.go(Screen::Title, now);
+                }
+                _ => {}
+            }
+            return false;
+        }
         // in any test: tab restarts (at once mid-test; every other screen change
-        // dissolves), enter on the results plays again
-        if let Some((mode, done)) = self.screen.test().map(|t| (t.mode, t.finished.is_some()))
+        // dissolves), enter on the results plays again, from the same level
+        let test = self.screen.test();
+        if let Some((mode, start, done)) =
+            test.map(|t| (t.mode, t.start_level, t.finished.is_some()))
             && (matches!(key, Key::Tab) || matches!(key, Key::Enter) && done)
         {
             let instant = matches!(key, Key::Tab) && !done;
-            self.go(practice(mode), now);
+            self.go(practice(mode, start), now);
             if instant {
                 self.fade = None;
             }
@@ -174,9 +200,20 @@ impl App {
 
     pub fn tick(&mut self, now: Instant) {
         let mut next = None;
+        // demo: take the suggested starting level after a moment
+        if self.bot.is_some() && self.pick.as_ref().is_some_and(|p| p.age(now) > 0.8) {
+            self.start_from();
+        }
         let idle = now.saturating_duration_since(self.since);
+        let picking = self.pick.is_some();
+        // leveled modes ask for a starting level before they begin
+        let mut ask = None;
         match &mut self.screen {
-            Screen::Title if self.menu.press_done(now) => next = Some(practice(self.menu.mode())),
+            Screen::Title if self.menu.press_done(now) => {
+                let mode = self.menu.mode();
+                next = Some(practice(mode, 1));
+                ask = mode.leveled().then_some(mode);
+            }
             // demo: show off the carousel for a lap, then play
             Screen::Title if self.bot.is_some() && idle > Duration::from_millis(1200) => {
                 if self.menu.lap_done() {
@@ -188,25 +225,25 @@ impl App {
             }
             Screen::Title => {}
             Screen::Practice(test) => {
-                if let Some(bot) = &mut self.bot {
+                if let Some(bot) = self.bot.as_mut().filter(|_| !picking) {
                     bot.drive(test, now);
                     if test
                         .finished
                         .is_some_and(|f| now - f > Duration::from_secs(4))
                     {
-                        next = Some(practice(test.mode));
+                        next = Some(practice(test.mode, test.start_level));
                     }
                 }
                 test.tick(now);
             }
             Screen::Lava(l) => {
-                if let Some(bot) = &mut self.bot {
+                if let Some(bot) = self.bot.as_mut().filter(|_| !picking) {
                     bot.drive_lava(l, now);
                     if l.test
                         .finished
                         .is_some_and(|f| now - f > Duration::from_secs(4))
                     {
-                        next = Some(practice(l.test.mode));
+                        next = Some(practice(l.test.mode, l.test.start_level));
                     }
                 }
                 l.tick(now);
@@ -226,6 +263,18 @@ impl App {
         if let Some(s) = next {
             self.go(s, now);
         }
+        if let Some(mode) = ask {
+            self.pick = Some(Pick::new(self.menu.start_of(mode), now));
+        }
+    }
+
+    /// Close the level picker and set the game to start from its choice.
+    fn start_from(&mut self) {
+        let Some(p) = self.pick.take() else { return };
+        if let Some(t) = self.screen.test_mut() {
+            t.start_level = LEVELS[p.choice];
+            self.menu.set_start(t.mode, p.choice);
+        }
     }
 
     pub fn draw(&mut self, f: &mut Frame) {
@@ -240,6 +289,9 @@ impl App {
             Screen::Practice(test) => ui::draw(f, test, self.outcome),
             Screen::Lava(l) if l.test.finished.is_some() => ui::draw(f, &l.test, self.outcome),
             Screen::Lava(l) => lava::draw(f, l, now),
+        }
+        if let (Some(p), Some(t)) = (&self.pick, self.screen.test()) {
+            menu::pick(f, p, t.mode, &self.bests, now);
         }
         if self.bot.is_some() {
             f.render_widget(Line::from(" DEMO ").black().on_magenta().bold(), f.area());
@@ -264,6 +316,7 @@ impl App {
         self.screen = screen;
         self.since = now;
         (self.outcome, self.scored) = (None, false);
+        self.pick = None;
         self.fade = self.frame.take().map(|b| (b, now));
     }
 }
@@ -277,16 +330,21 @@ fn reload() {
     }
 }
 
-fn practice(mode: Mode) -> Screen {
+/// A fresh game of `mode`, starting at level `start` (leveled modes).
+fn practice(mode: Mode, start: u32) -> Screen {
     if let Mode::Lava(aim) = mode {
-        return Screen::Lava(Lava::new(aim));
+        let mut l = Lava::new(aim);
+        l.test.start_level = start;
+        return Screen::Lava(l);
     }
     // only word tests end on their own text; the rest stream more in as you type
     let n = match mode {
         Mode::Words(n) => n,
         _ => 100,
     };
-    Screen::Practice(Test::new(mode, &random_words(n)))
+    let mut t = Test::new(mode, &random_words(n));
+    t.start_level = start;
+    Screen::Practice(t)
 }
 
 /// Dev autopilot (`--demo` / `?demo`): types whatever test is on screen,

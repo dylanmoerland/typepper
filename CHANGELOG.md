@@ -6,6 +6,7 @@ What changed in each typepper release, newest first.
 
 - New mode, FLOOR IS LAVA: words fall toward rising lava, so type them before they land. Pick lock-on (your first letter locks onto a word) or free (any word you spell clears)
 - Play on your phone: tap to play, swipe to pick a mode, and type with your phone's keyboard
+- Survival and FLOOR IS LAVA let you pick a starting level (1, 4, 7 or 10), so experienced typers can skip the warm-up; bests are kept per starting level
 - typepper.com gets link previews and a GitHub link in the footer
 
 ## [0.1.0] - 2026-10-16

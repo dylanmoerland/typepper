@@ -623,6 +623,14 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     f.render_widget(chart_widget, chart);
 
     let mode = match t.mode {
+        m if m.leveled() && t.start_level > 1 => {
+            format!(
+                "{} lv{} (from lv{})",
+                menu::label(m),
+                t.level(),
+                t.start_level
+            )
+        }
         m if m.leveled() => format!("{} lv{}", menu::label(m), t.level()),
         m => menu::label(m),
     };

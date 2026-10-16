@@ -145,6 +145,8 @@ const MULT_STEPS: u32 = 3;
 pub const FUEL: f64 = 10.0;
 /// Survival: fuel each correct word adds.
 const REFILL: f64 = 1.5;
+/// Levels a leveled mode (survival, lava) can start from, Tetris-style.
+pub const LEVELS: [u32; 4] = [1, 4, 7, 10];
 /// Survival: words per level; each level drains this much faster.
 const LEVEL_WORDS: u32 = 10;
 const DRAIN_STEP: f64 = 1.12;
@@ -196,6 +198,8 @@ pub struct Test {
     pub words: u32,
     /// Survival seconds left.
     pub fuel: f64,
+    /// The level a leveled mode starts from (picked before the run).
+    pub start_level: u32,
     pub words_done: Vec<WordDone>,
     /// Backspaced chars: when, where, and what was typed there.
     pub erased: Vec<(Instant, usize, char)>,
@@ -216,6 +220,7 @@ impl Test {
             mode,
             target: words.join(" ").chars().collect(),
             fuel: FUEL,
+            start_level: 1,
             ..Default::default()
         }
     }
@@ -365,7 +370,7 @@ impl Test {
 
     /// Level in the endless word modes (survival, lava), from 1.
     pub fn level(&self) -> u32 {
-        1 + self.words / LEVEL_WORDS
+        self.start_level.max(1) + self.words / LEVEL_WORDS
     }
 
     fn cool(&mut self, now: Instant) {
@@ -532,6 +537,15 @@ mod tests {
         let mut t = Test::new(Mode::Time(60), &["a"; 30]);
         type_steady(&mut t, 20, 200, t0);
         assert!(t.mult_up.is_some(), "combo 20 steps to x2");
+    }
+
+    #[test]
+    fn levels_count_up_from_the_start_level() {
+        let mut t = Test::new(Mode::Survival, &["a"]);
+        assert_eq!(t.level(), 1);
+        t.start_level = 7;
+        t.words = 23;
+        assert_eq!(t.level(), 9, "7 plus two levels of ten words");
     }
 
     #[test]

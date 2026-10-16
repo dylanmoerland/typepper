@@ -45,8 +45,9 @@ impl Bests {
         self.0.iter().map(|(k, v)| format!("{k}={v}\n")).collect()
     }
 
-    pub fn get(&self, m: Mode) -> Option<f64> {
-        self.0.get(&label(m)).copied()
+    /// The best for `m`, started from level `start` (1 for unleveled modes).
+    pub fn get(&self, m: Mode, start: u32) -> Option<f64> {
+        self.0.get(&key(m, start)).copied()
     }
 
     /// Score a finished test; a new best is kept (and saved). Zen has none.
@@ -58,14 +59,24 @@ impl Bests {
         };
         let out = Outcome {
             value,
-            was: self.get(t.mode),
+            was: self.get(t.mode, t.start_level),
         };
         if out.is_new() {
-            self.0.insert(label(t.mode), value);
+            self.0.insert(key(t.mode, t.start_level), value);
             // ponytail: a failed save only loses this best; no error UI for it
             let _ = store::write("bests", &self.to_text());
         }
         Some(out)
+    }
+}
+
+/// Bests are kept per mode, and per starting level when it isn't 1 (so a
+/// run from level 10 isn't compared with one from level 1, and the keys
+/// saved before levels existed still mean level 1).
+fn key(m: Mode, start: u32) -> String {
+    match start {
+        2.. if m.leveled() => format!("{} from lv{start}", label(m)),
+        _ => label(m),
     }
 }
 
@@ -84,9 +95,15 @@ mod tests {
     #[test]
     fn parses_what_it_writes_and_skips_junk() {
         let b = Bests::parse("BLITZ 30s=87\njunk\nSURVIVAL=nope\nSPRINT 10w=102.5\n");
-        assert_eq!(b.get(Mode::Time(30)), Some(87.0));
-        assert_eq!(b.get(Mode::Words(10)), Some(102.5));
-        assert_eq!(b.get(Mode::Survival), None);
+        assert_eq!(b.get(Mode::Time(30), 1), Some(87.0));
+        assert_eq!(b.get(Mode::Words(10), 1), Some(102.5));
+        assert_eq!(b.get(Mode::Survival, 1), None);
+        assert_eq!(key(Mode::Survival, 4), "SURVIVAL from lv4");
+        assert_eq!(
+            key(Mode::Time(30), 4),
+            "BLITZ 30s",
+            "unleveled modes ignore it"
+        );
         assert_eq!(Bests::parse(&b.to_text()).0, b.0);
     }
 
