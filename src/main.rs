@@ -32,8 +32,9 @@ fn main() -> std::io::Result<()> {
     ratatui::run(|terminal| {
         loop {
             terminal.draw(|f| app.draw(f))?;
-            // ~60fps for timers/effects; a keypress wakes poll immediately
-            if event::poll(Duration::from_millis(16))?
+            // ~120fps for timers/effects (a frame draws in well under 1ms, and
+            // terminals on 120Hz screens show it); a keypress wakes poll at once
+            if event::poll(Duration::from_millis(8))?
                 && let Event::Key(k) = event::read()?
                 && k.kind == KeyEventKind::Press
             {
