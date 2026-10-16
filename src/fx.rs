@@ -8,7 +8,7 @@ use web_time::Instant;
 
 use ratatui::prelude::*;
 
-use crate::engine::{HOT, RANKS, Test};
+use crate::engine::{HOT, Mode, RANKS, Test};
 
 pub type Rgb = (u8, u8, u8);
 pub const WHITE: Rgb = (255, 255, 255);
@@ -645,6 +645,70 @@ pub fn mult_punch(buf: &mut Buffer, t: &Test, now: Instant, at: (u16, u16)) {
         let a = step as f64 / 20.0 * 2.0 * PI;
         let (x, y) = (at.0 as f64 + 2.0 * r * a.cos(), at.1 as f64 + r * a.sin());
         put_behind(buf, x.round() as i32, y.round() as i32, "·", style);
+    }
+}
+
+// ── pressure ────────────────────────────────────────────────────────────
+
+const GO: f64 = 0.45;
+
+/// The first key: "GO!" pops up off the start of the text and a ring of
+/// sparks bursts out.
+pub fn go_burst(
+    buf: &mut Buffer,
+    t: &Test,
+    now: Instant,
+    pos: impl Fn(usize) -> Option<(u16, u16)>,
+) {
+    let age = since(t.started, now).as_secs_f64();
+    let Some((x, y)) = pos(0).filter(|_| age < GO) else {
+        return;
+    };
+    let k = age / GO;
+    let style = Style::new()
+        .fg(lerp(mix(RANK_RGB[3], WHITE, 0.5), page_rgb(), k))
+        .bold();
+    let r = 1.0 + 4.0 * k;
+    for step in 0..12 {
+        let a = step as f64 / 12.0 * 2.0 * PI;
+        let (sx, sy) = (x as f64 + 2.0 * r * a.cos(), y as f64 + r * a.sin());
+        let sym = if k < 0.5 { "✦" } else { "·" };
+        put_behind(buf, sx.round() as i32, sy.round() as i32, sym, style);
+    }
+    let gy = y as i32 - 1 - (k * 1.5) as i32;
+    for (j, ch) in "GO!".chars().enumerate() {
+        put(buf, x as i32 + j as i32, gy, &ch.to_string(), style);
+    }
+}
+
+/// Survival under 3s of fuel: a lub-dub heartbeat (0..1), quicker under 1.5s.
+pub fn fuel_beat(t: &Test, now: Instant) -> f64 {
+    if t.mode != Mode::Survival || t.started.is_none() || t.fuel >= 3.0 {
+        return 0.0;
+    }
+    // fixed tiers: a rate that drifts with the fuel would skip the phase around
+    let rate = if t.fuel < 1.5 { 2.6 } else { 1.6 };
+    let p = (anim_clock(t, now) * rate).fract();
+    (-p * 14.0)
+        .exp()
+        .max(0.6 * (-(p - 0.22).abs() * 14.0).exp())
+}
+
+/// Red creeping in from the screen edges, `k` 0..1.
+pub fn vignette(buf: &mut Buffer, k: f64) {
+    if k <= 0.0 {
+        return;
+    }
+    let (a, page) = (buf.area, page_rgb());
+    for y in a.top()..a.bottom() {
+        for x in a.left()..a.right() {
+            let dx = (x - a.left()).min(a.right() - 1 - x) as f64 / 4.0;
+            let dy = (y - a.top()).min(a.bottom() - 1 - y) as f64 / 2.0;
+            let d = dx.min(dy);
+            if d < 1.0 {
+                buf[(x, y)].set_bg(lerp(page, (190, 0, 0), (1.0 - d) * k));
+            }
+        }
     }
 }
 

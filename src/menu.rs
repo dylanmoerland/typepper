@@ -84,6 +84,13 @@ const SLIDE: f64 = 0.26; // seconds per swipe
 const WAIT_TITLE: f64 = 0.12; // card mostly arrived; text starts
 const DECODE: f64 = 0.35; // title letters scrambling into place
 const TYPE: f64 = 0.4; // blurb typing itself in
+const CHIP: f64 = 0.18; // length highlight sliding between options
+const PRESS: f64 = 0.2; // enter: the card squeezes and springs back
+const NUDGE: f64 = 0.25; // a ◂ ▸ hint lighting up on its swipe
+
+fn since(t: Option<Instant>, now: Instant) -> f64 {
+    t.map_or(f64::MAX, |t| now.saturating_duration_since(t).as_secs_f64())
+}
 
 pub struct Menu {
     /// Carousel target; unbounded so wrapping around still slides one step.
@@ -94,6 +101,10 @@ pub struct Menu {
     at: Instant,
     /// Chosen length per group.
     len: [usize; 4],
+    /// Last length change on the selected card: from which option, when.
+    chip: (usize, Option<Instant>),
+    /// Enter was pressed: the card squeezes, then the test starts.
+    pressed: Option<Instant>,
     /// Clock for idle animations.
     born: Instant,
 }
@@ -105,6 +116,8 @@ impl Menu {
             from: 1.0,
             at: now,
             len: [1, 1, 0, 0],
+            chip: (0, None),
+            pressed: None,
             born: now,
         }
     }
@@ -138,10 +151,34 @@ impl Menu {
         self.at = now;
     }
 
-    pub fn length(&mut self, dir: i64) {
+    pub fn length(&mut self, dir: i64, now: Instant) {
         let s = self.sel();
         let n = MENU[s].modes.len() as i64;
+        self.chip = (self.len[s], Some(now));
         self.len[s] = (self.len[s] as i64 + dir).rem_euclid(n) as usize;
+    }
+
+    /// Where the selected card's length highlight is, in options (slides).
+    fn chip_at(&self, now: Instant) -> f64 {
+        let to = self.len[self.sel()] as f64;
+        let k = since(self.chip.1, now) / CHIP;
+        match k < 1.0 {
+            true => self.chip.0 as f64 + (to - self.chip.0 as f64) * ease_out_back(k),
+            false => to,
+        }
+    }
+
+    pub fn press(&mut self, now: Instant) {
+        self.pressed.get_or_insert(now);
+    }
+
+    pub fn pressing(&self) -> bool {
+        self.pressed.is_some()
+    }
+
+    /// The press animation has played: time to start the test.
+    pub fn press_done(&self, now: Instant) -> bool {
+        self.pressed.is_some_and(|p| since(Some(p), now) >= PRESS)
     }
 
     /// Demo: swiped all the way round, back on the starting card.
@@ -153,6 +190,7 @@ impl Menu {
     pub fn back(&mut self, now: Instant) {
         self.from = self.target as f64;
         self.at = now;
+        self.pressed = None;
     }
 }
 
@@ -240,17 +278,7 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
 
     carousel(f.buffer_mut(), cards, m, bests, now, secs);
 
-    let dots: Vec<Span> = (0..MENU.len())
-        .flat_map(|i| {
-            let (r, g, b) = MENU[i].color;
-            let dot = match i == m.sel() {
-                true => Span::styled("●", Color::Rgb(r, g, b)),
-                false => "●".dark_gray(),
-            };
-            [dot, " ".into()]
-        })
-        .collect();
-    Line::from(dots).centered().render(dot_row, f.buffer_mut());
+    dots(f.buffer_mut(), dot_row, m.scroll(now));
     let theme = if theme::is_light() { "light" } else { "dark" };
     let hint = format!("←/→ mode · ↑/↓ length · enter play · t theme: {theme}{QUIT}");
     Line::from(hint.dark_gray())
@@ -281,8 +309,15 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant,
         let d = (i as f64 - s + 2.0).rem_euclid(4.0) - 2.0; // −2..2, wraps around
         // cards shrink away from the middle, so they grow as they slide in
         let k = d.abs().min(1.0);
-        let w = (big + (small - big) * k).round() as u16;
-        let h = (area.height as f64 - 2.0 * k).round() as u16;
+        // enter squeezes the selected card in and lets it spring back
+        let sq = match (i == m.sel(), m.pressed) {
+            (true, Some(p)) => (since(Some(p), now) / PRESS * std::f64::consts::PI)
+                .sin()
+                .max(0.0),
+            _ => 0.0,
+        };
+        let w = (big + (small - big) * k - 4.0 * sq).round() as u16;
+        let h = (area.height as f64 - 2.0 * k - 2.0 * sq).round() as u16;
         let x = (mid + d * gap - w as f64 / 2.0).round() as i32;
         // only the middle card and one either side (−2 has no mirror at +2)
         if d.abs() >= 1.75 || x + w as i32 <= area.x as i32 || x >= area.right() as i32 {
@@ -291,13 +326,14 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant,
         let mut card = Buffer::empty(Rect::new(0, 0, w, h));
         let mode = g.modes[m.len[i]];
         let best = bests.get(mode).map(|v| best::show(mode, v));
-        draw_card(&mut card, g, i == m.sel(), m.len[i], best, m.age(now), secs);
+        draw_card(&mut card, m, i, best, now, secs);
         // sharp inside the middle slot, defocusing toward the screen edges
         blit(buf, &card, x, area.y + (area.height - h) / 2, |sx| {
             let off = (sx as f64 + 0.5 - mid).abs() - big / 2.0 - 1.0;
             1.0 - off.max(0.0) / falloff
         });
     }
+    hints(buf, area, m, mid - big / 2.0, mid + big / 2.0, now, secs);
     // speed streaks through the empty space while the cards fly
     if v.abs() > 1.5 {
         let len = (v.abs() * 3.0).min(18.0) as i32;
@@ -327,15 +363,8 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant,
     }
 }
 
-fn draw_card(
-    card: &mut Buffer,
-    g: &Group,
-    sel: bool,
-    chosen: usize,
-    best: Option<String>,
-    age: f64,
-    secs: f64,
-) {
+fn draw_card(card: &mut Buffer, m: &Menu, i: usize, best: Option<String>, now: Instant, secs: f64) {
+    let (g, sel, age) = (&MENU[i], i == m.sel(), m.age(now));
     let area = card.area;
     let (r, gr, b) = g.color;
     let color = Color::Rgb(r, gr, b);
@@ -346,6 +375,7 @@ fn draw_card(
             BorderType::Rounded
         })
         .border_style(match sel {
+            _ if sel && m.pressing() => Color::White,
             true => lerp(WHITE, g.color, ((age - WAIT_TITLE) / GLINT).clamp(0.0, 1.0)),
             false => color,
         });
@@ -395,29 +425,118 @@ fn draw_card(
     }
     Line::from(typed.gray()).centered().render(blurb, card);
 
-    let opts: Line = match g.modes {
-        [_] => Line::from("endless".dark_gray()),
-        modes => modes
-            .iter()
-            .enumerate()
-            .flat_map(|(i, m)| {
-                let s = format!(" {m} ");
-                [
-                    if i == chosen {
-                        s.black().bg(color).bold()
-                    } else {
-                        s.dark_gray()
-                    },
-                    " ".into(),
-                ]
-            })
-            .collect(),
-    };
-    opts.centered().render(len, card);
+    match g.modes {
+        [_] => Line::from("endless".dark_gray())
+            .centered()
+            .render(len, card),
+        modes => {
+            let chip = if sel { m.chip_at(now) } else { m.len[i] as f64 };
+            options(card, len, modes, chip, color);
+        }
+    }
     if let Some(b) = best {
         Line::from(format!("best {b}").dark_gray())
             .centered()
             .render(best_row, card);
+    }
+}
+
+/// Length options in a row, with a highlight chip at option `chip`; a
+/// fractional `chip` puts it partway between two options, sliding.
+fn options(card: &mut Buffer, row: Rect, modes: &[Mode], chip: f64, color: Color) {
+    let labels: Vec<String> = modes.iter().map(|m| format!(" {m} ")).collect();
+    let total: usize = labels.iter().map(|l| l.chars().count() + 1).sum::<usize>() - 1;
+    let x0 = row.x as f64 + (row.width as f64 - total as f64) / 2.0;
+    let mut starts = Vec::new();
+    let mut x = x0.floor();
+    for l in &labels {
+        starts.push(x);
+        x += l.chars().count() as f64 + 1.0;
+    }
+    let mut cx = x0.floor() as u16;
+    for (j, l) in labels.iter().enumerate() {
+        if j > 0 {
+            cx += 1;
+        }
+        Line::from(l.as_str().dark_gray())
+            .render(Rect::new(cx, row.y, l.chars().count() as u16, 1), card);
+        cx += l.chars().count() as u16;
+    }
+    let chip = chip.clamp(0.0, (labels.len() - 1) as f64);
+    let (j, f) = (chip.floor() as usize, chip.fract());
+    let k = (j + 1).min(labels.len() - 1);
+    let width = |j: usize| labels[j].chars().count() as f64;
+    let hx = starts[j] + (starts[k] - starts[j]) * f;
+    let hw = width(j) + (width(k) - width(j)) * f;
+    for x in hx.round() as u16..(hx + hw).round() as u16 {
+        if card.area.contains(Position::new(x, row.y)) {
+            card[(x, row.y)].set_style(Style::new().black().bg(color).bold());
+        }
+    }
+}
+
+/// ◂ ▸ either side of the middle card: breathing while idle, lit and nudged
+/// outward on a swipe their way.
+fn hints(buf: &mut Buffer, area: Rect, m: &Menu, left: f64, right: f64, now: Instant, secs: f64) {
+    let y = area.y + area.height / 2;
+    let dir = (m.target as f64 - m.from).signum() as i64;
+    let lit = m.age(now) < NUDGE;
+    let idle = lerp(
+        page_rgb(),
+        (200, 200, 200),
+        0.35 + 0.25 * (secs * 3.0).sin(),
+    );
+    for (side, x, sym) in [(-1, left - 2.0, "◂"), (1, right + 1.0, "▸")] {
+        let on = lit && dir == side;
+        let x = x as i32 + if on { side as i32 } else { 0 };
+        if (area.left() as i32..area.right() as i32).contains(&x) {
+            let style = match on {
+                true => Style::new().fg(Color::White).bold(),
+                false => Style::new().fg(idle),
+            };
+            buf[(x as u16, y)].set_symbol(sym).set_style(style);
+        }
+    }
+}
+
+/// One dot per mode; while sliding, the active one stretches toward the
+/// next like a worm, then catches up.
+fn dots(buf: &mut Buffer, row: Rect, s: f64) {
+    let n = MENU.len() as i64;
+    let x0 = row.x as i32 + (row.width as i32 - (2 * n as i32 - 1)) / 2;
+    let dot_x = |i: i64| x0 + 2 * i.rem_euclid(n) as i32;
+    for i in 0..n {
+        let x = dot_x(i);
+        if (row.left() as i32..row.right() as i32).contains(&x) {
+            buf[(x as u16, row.y)]
+                .set_symbol("●")
+                .set_fg(Color::DarkGray);
+        }
+    }
+    let (i, k) = (s.floor() as i64, s - s.floor());
+    let color = mix(
+        MENU[i.rem_euclid(n) as usize].color,
+        MENU[(i + 1).rem_euclid(n) as usize].color,
+        k,
+    );
+    let style = Style::new().fg(Color::Rgb(color.0, color.1, color.2));
+    let (a, b) = (dot_x(i), dot_x(i + 1));
+    // wrapping around the ends just hops; neighbors stretch
+    let (tail, head) = match b > a {
+        true => (
+            a + ((b - a) as f64 * (2.0 * k - 1.0).max(0.0)).round() as i32,
+            a + ((b - a) as f64 * (2.0 * k).min(1.0)).round() as i32,
+        ),
+        false => {
+            let at = if k < 0.5 { a } else { b };
+            (at, at)
+        }
+    };
+    for x in tail..=head {
+        if (row.left() as i32..row.right() as i32).contains(&x) {
+            let sym = if x == tail || x == head { "●" } else { "━" };
+            buf[(x as u16, row.y)].set_symbol(sym).set_style(style);
+        }
     }
 }
 
@@ -647,7 +766,7 @@ mod tests {
         m.swipe(-1, t0);
         m.swipe(-1, t0);
         assert_eq!(m.sel(), 3, "wraps past the first card");
-        m.length(1);
+        m.length(1, t0);
         assert_eq!(m.mode(), Mode::Survival, "single-length modes stay put");
         let done = t0 + Duration::from_secs(1);
         assert_eq!(m.scroll(done), -1.0);
@@ -656,7 +775,7 @@ mod tests {
             "overshoots"
         );
         m.swipe(1, done);
-        m.length(-1);
+        m.length(-1, done);
         assert_eq!(m.mode(), Mode::Words(10), "back on sprint, shortest");
         assert_eq!(label(m.mode()), "SPRINT 10w");
     }

@@ -67,6 +67,19 @@ pub fn draw(f: &mut Frame, t: &Test, outcome: Option<Outcome>) {
     fx::caret_flame(f.buffer_mut(), t, now, text.caret);
     fx::shatter(f.buffer_mut(), t, now, combo);
     fx::tumblers(f.buffer_mut(), t, now, panel, help);
+    // survival nearly dry: the edges throb red with the heartbeat
+    if t.fuel < 2.0 {
+        let beat = fx::fuel_beat(t, now);
+        fx::vignette(f.buffer_mut(), (1.0 - t.fuel / 2.0) * (0.4 + 0.6 * beat));
+    }
+}
+
+/// Blitz's last 5 seconds: time since the clock last ticked over.
+fn last_seconds(t: &Test, now: Instant) -> Option<f64> {
+    let Mode::Time(s) = t.mode else { return None };
+    t.started?;
+    let left = s as f64 - t.elapsed(now).as_secs_f64();
+    (left > 0.0 && left <= 5.0).then(|| left.ceil() - left)
 }
 
 /// Where the typing text sits on screen, so effects can start from a letter.
@@ -95,7 +108,12 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
     f.render_widget(Clear, panel);
     let panel_block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(lerp((0, 0, 0), RANK_RGB[t.rank], fx::PANEL_DIM)))
+        .border_style(Style::new().fg({
+            // blitz's last seconds: the border ticks red with the clock
+            let rest = fx::mix((0, 0, 0), RANK_RGB[t.rank], fx::PANEL_DIM);
+            let tick = last_seconds(t, now).unwrap_or(1.0);
+            lerp((255, 40, 30), rest, tick / 0.5)
+        }))
         .padding(Padding::new(2, 2, 1, 1));
     let inner = panel_block.inner(panel);
     f.render_widget(panel_block, panel);
@@ -120,12 +138,19 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         );
     } else {
         let progress = match t.mode {
-            Mode::Time(s) => format!("{}", s.saturating_sub(t.elapsed(now).as_secs())).yellow(),
+            Mode::Time(s) => {
+                let left = format!("{}", s.saturating_sub(t.elapsed(now).as_secs()));
+                match last_seconds(t, now) {
+                    Some(tick) if tick < 0.25 => left.white(),
+                    Some(_) => left.red(),
+                    None => left.yellow(),
+                }
+            }
             Mode::Words(n) => {
                 format!("{}/{n}", t.typed.iter().filter(|c| **c == ' ').count()).yellow()
             }
             Mode::Zen => format!("{} words", t.words).yellow(),
-            Mode::Survival => fuel_gauge(t),
+            Mode::Survival => fuel_gauge(t, fx::fuel_beat(t, now)),
         };
         let stats = Line::from(vec![
             progress.bold(),
@@ -262,6 +287,7 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
     fx::crumbs(buf, t, now, pos);
     fx::sparks(buf, t, now, pos);
     fx::points(buf, t, now, pos);
+    fx::go_burst(buf, t, now, pos);
 
     f.render_widget(heat_bar(t.heat, t.rank, heat.width as usize), heat);
 
@@ -275,7 +301,8 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
 }
 
 /// Survival fuel: a draining gauge, red when nearly dry, plus the level.
-fn fuel_gauge(t: &Test) -> Span<'static> {
+/// `beat` (0..1) flashes it like a heartbeat when nearly dry.
+fn fuel_gauge(t: &Test, beat: f64) -> Span<'static> {
     let k = (t.fuel / FUEL).clamp(0.0, 1.0);
     let ticks = (k * 10.0).ceil() as usize;
     let s = format!(
@@ -284,7 +311,11 @@ fn fuel_gauge(t: &Test) -> Span<'static> {
         "▰".repeat(ticks),
         "▱".repeat(10 - ticks)
     );
-    Span::styled(s, lerp((255, 30, 30), (255, 215, 0), k * 2.0))
+    let c = match beat {
+        0.0 => lerp((255, 30, 30), (255, 215, 0), k * 2.0),
+        _ => lerp((255, 30, 30), WHITE, 0.7 * beat),
+    };
+    Span::styled(s, c)
 }
 
 /// Heat gauge colored by the rank each segment belongs to, plus a Scoville readout.

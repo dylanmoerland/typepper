@@ -74,14 +74,14 @@ impl App {
                 self.menu.back(now);
                 next = Some(Screen::Title);
             }
+            // enter was pressed: the card is springing, the test is coming
+            (Screen::Title, _) if self.menu.pressing() => {}
             (Screen::Title, Key::Char('t')) => crate::theme::toggle(),
             (Screen::Title, Key::Left) => self.menu.swipe(-1, now),
             (Screen::Title, Key::Right) => self.menu.swipe(1, now),
-            (Screen::Title, Key::Up) => self.menu.length(-1),
-            (Screen::Title, Key::Down) => self.menu.length(1),
-            (Screen::Title, Key::Enter | Key::Char(' ')) => {
-                next = Some(practice(self.menu.mode()));
-            }
+            (Screen::Title, Key::Up) => self.menu.length(-1, now),
+            (Screen::Title, Key::Down) => self.menu.length(1, now),
+            (Screen::Title, Key::Enter | Key::Char(' ')) => self.menu.press(now),
             (Screen::Title, _) => {}
             (Screen::Practice(test), key) => match key {
                 Key::Tab => next = Some(practice(test.mode)),
@@ -101,10 +101,11 @@ impl App {
         let mut next = None;
         let idle = now.saturating_duration_since(self.since);
         match &mut self.screen {
+            Screen::Title if self.menu.press_done(now) => next = Some(practice(self.menu.mode())),
             // demo: show off the carousel for a lap, then play
             Screen::Title if self.bot.is_some() && idle > Duration::from_millis(1200) => {
                 if self.menu.lap_done() {
-                    next = Some(practice(self.menu.mode()));
+                    self.menu.press(now);
                 } else {
                     self.menu.swipe(1, now);
                     self.since = now;
