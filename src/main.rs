@@ -4,6 +4,8 @@ mod engine;
 mod fx;
 mod menu;
 mod pepper;
+mod settings;
+mod store;
 mod theme;
 mod ui;
 

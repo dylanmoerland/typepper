@@ -1,5 +1,5 @@
 //! Personal bests: one number per mode (wpm, or words survived), kept as
-//! `label=value` lines in a file on desktop and in localStorage on the web.
+//! `label=value` lines (see `store`).
 
 use std::collections::BTreeMap;
 
@@ -7,6 +7,7 @@ use web_time::Instant;
 
 use crate::engine::{Mode, Test};
 use crate::menu::label;
+use crate::store;
 
 /// What a finished test scored against your best.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -26,7 +27,7 @@ pub struct Bests(BTreeMap<String, f64>);
 
 impl Bests {
     pub fn load() -> Self {
-        Self::parse(&storage::read().unwrap_or_default())
+        Self::parse(&store::read("bests").unwrap_or_default())
     }
 
     fn parse(text: &str) -> Self {
@@ -62,7 +63,7 @@ impl Bests {
         if out.is_new() {
             self.0.insert(label(t.mode), value);
             // ponytail: a failed save only loses this best; no error UI for it
-            let _ = storage::write(&self.to_text());
+            let _ = store::write("bests", &self.to_text());
         }
         Some(out)
     }
@@ -73,46 +74,6 @@ pub fn show(m: Mode, v: f64) -> String {
     match m {
         Mode::Survival => format!("{v:.0} words"),
         _ => format!("{v:.0} wpm"),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-mod storage {
-    use std::path::PathBuf;
-
-    fn path() -> Option<PathBuf> {
-        let var = |k| std::env::var_os(k).map(PathBuf::from);
-        let dir = var("XDG_DATA_HOME")
-            .or_else(|| var("HOME").map(|h| h.join(".local/share")))
-            .or_else(|| var("APPDATA"))?;
-        Some(dir.join("typepper").join("bests"))
-    }
-
-    pub fn read() -> Option<String> {
-        std::fs::read_to_string(path()?).ok()
-    }
-
-    pub fn write(text: &str) -> std::io::Result<()> {
-        let p = path().ok_or(std::io::ErrorKind::NotFound)?;
-        std::fs::create_dir_all(p.parent().unwrap())?;
-        std::fs::write(p, text)
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod storage {
-    const KEY: &str = "typepper.bests";
-
-    fn local() -> Option<ratzilla::web_sys::Storage> {
-        ratzilla::web_sys::window()?.local_storage().ok()?
-    }
-
-    pub fn read() -> Option<String> {
-        local()?.get_item(KEY).ok()?
-    }
-
-    pub fn write(text: &str) -> Result<(), ()> {
-        local().ok_or(())?.set_item(KEY, text).map_err(|_| ())
     }
 }
 

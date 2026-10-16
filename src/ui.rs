@@ -11,6 +11,7 @@ use ratatui::widgets::{
 use crate::best::{self, Outcome};
 use crate::engine::{FUEL, HOT, Mode, RANKS, Test, scoville};
 use crate::fx::{self, RANK_RGB, WHITE, anim_clock, hash, hsv, lerp, rank_color, since};
+use crate::settings::calm;
 use crate::{menu, pepper};
 
 const FLASH: Duration = Duration::from_millis(120);
@@ -111,7 +112,7 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         .border_style(Style::new().fg({
             // blitz's last seconds: the border ticks red with the clock
             let rest = fx::mix((0, 0, 0), RANK_RGB[t.rank], fx::PANEL_DIM);
-            let tick = last_seconds(t, now).unwrap_or(1.0);
+            let tick = last_seconds(t, now).filter(|_| !calm()).unwrap_or(1.0);
             lerp((255, 40, 30), rest, tick / 0.5)
         }))
         .padding(Padding::new(2, 2, 1, 1));
@@ -198,7 +199,10 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
     if t.fever() {
         lines[3].push_span(
             " FEVER"
-                .fg(fx::fire(0.6 + 0.4 * (clock * 9.0).sin()))
+                .fg(fx::fire(match calm() {
+                    true => 0.8,
+                    false => 0.6 + 0.4 * (clock * 9.0).sin(),
+                }))
                 .bold(),
         );
     }
@@ -228,7 +232,7 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
     f.render_widget(Paragraph::new(rank_lines), rank_area);
 
     // text box: shakes on a broken combo, border heats up with rank
-    let shake = t.broke.is_some_and(|(_, at)| since(Some(at), now) < SHAKE);
+    let shake = !calm() && t.broke.is_some_and(|(_, at)| since(Some(at), now) < SHAKE);
     // centered with 1 spare column each side; shaking jitters it left/right
     let dx = match shake {
         true if ((clock * 30.0) as u64).is_multiple_of(2) => 0,
@@ -240,9 +244,10 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         width: text.width.saturating_sub(2),
         ..text
     };
-    let flashing = since(t.last_error, now) < FLASH;
+    let flashing = !calm() && since(t.last_error, now) < FLASH;
     let border = match t.rank {
         _ if flashing => Color::Red,
+        4.. if calm() => color,
         0..=2 => Color::DarkGray,
         3 => color,
         4 => lerp((90, 50, 0), RANK_RGB[4], 0.5 + 0.5 * (clock * 5.0).sin()),
@@ -296,7 +301,11 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         _ => "tab restart · esc menu",
     };
     // style the span, not the line: a styled Line recolors the flames across the whole row
-    f.render_widget(Line::from(hint.dark_gray()).centered(), help);
+    // padded so the flames keep a little distance from the text
+    f.render_widget(
+        Line::from(format!("  {hint}  ").dark_gray()).centered(),
+        help,
+    );
     (geom, combo_area)
 }
 
@@ -386,7 +395,9 @@ fn letter(t: &Test, i: usize, clock: f64) -> Style {
     }
     let rgb = RANK_RGB[t.rank];
     let bold = |s: Style, on: bool| if on { s.bold() } else { s };
-    match t.rank {
+    // calm: the top ranks keep the steady trail instead of waves and rainbows
+    let tier = if calm() { t.rank.min(4) } else { t.rank };
+    match tier {
         0 | 1 => Style::new().white(),
         2 => bold(
             Style::new().fg(if age == 0 {
@@ -505,6 +516,7 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
             // a new best lands white-hot, then shimmers through the heat colors
             let c = match secs - BEST_AT < 0.15 {
                 true => Color::White,
+                false if calm() => rank_color(5),
                 false => hsv(20.0 + 40.0 * (secs * 4.0).sin(), 1.0, 1.0),
             };
             let mut spans = vec![
@@ -609,7 +621,7 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     );
     f.render_widget(Line::from(line).dark_gray().centered(), details);
     f.render_widget(
-        Line::from("tab/enter again · esc menu")
+        Line::from("  tab/enter again · esc menu  ")
             .dark_gray()
             .centered(),
         help,

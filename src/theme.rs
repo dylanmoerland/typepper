@@ -21,10 +21,6 @@ pub fn is_light() -> bool {
     LIGHT.load(Ordering::Relaxed)
 }
 
-pub fn toggle() {
-    set_light(!is_light());
-}
-
 const PAPER: Color = Color::Rgb(250, 247, 240);
 
 /// The page behind everything: canvas padding on the web, and the color

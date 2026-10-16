@@ -35,6 +35,8 @@ fn pepper_body(t: &Test) -> Color {
     }
 }
 
+use crate::settings::calm;
+
 /// Clipped write: effects can wander off-screen without panicking.
 fn put(buf: &mut Buffer, x: i32, y: i32, sym: &str, style: Style) {
     let a = buf.area;
@@ -49,7 +51,7 @@ fn put(buf: &mut Buffer, x: i32, y: i32, sym: &str, style: Style) {
 
 /// Anime speed lines streaking left from habanero up.
 pub fn speed_lines(buf: &mut Buffer, t: &Test, now: Instant) {
-    if t.rank < HOT {
+    if t.rank < HOT || calm() {
         return;
     }
     let every = [0, 0, 0, 0, 6, 4, 2][t.rank];
@@ -83,7 +85,7 @@ const FLARE: f64 = 0.5; // seconds a rank-up flares the flames
 /// Background fire. Embers from jalapeño up, flames rise with heat,
 /// flare on every rank-up, and swallow the screen at reaper.
 pub fn flames(buf: &mut Buffer, t: &Test, now: Instant) {
-    if t.rank < 2 {
+    if t.rank < 2 || calm() {
         return;
     }
     let area = buf.area;
@@ -503,7 +505,7 @@ pub fn miss_shake(
     caret: (u16, u16),
 ) {
     let age = since(t.last_error, now).as_secs_f64();
-    if age >= MISS {
+    if age >= MISS || calm() {
         return;
     }
     if buf.area.contains(caret.into()) {
@@ -683,7 +685,7 @@ pub fn go_burst(
 
 /// Survival under 3s of fuel: a lub-dub heartbeat (0..1), quicker under 1.5s.
 pub fn fuel_beat(t: &Test, now: Instant) -> f64 {
-    if t.mode != Mode::Survival || t.started.is_none() || t.fuel >= 3.0 {
+    if t.mode != Mode::Survival || t.started.is_none() || t.fuel >= 3.0 || calm() {
         return 0.0;
     }
     // fixed tiers: a rate that drifts with the fuel would skip the phase around
@@ -696,7 +698,7 @@ pub fn fuel_beat(t: &Test, now: Instant) -> f64 {
 
 /// Red creeping in from the screen edges, `k` 0..1.
 pub fn vignette(buf: &mut Buffer, k: f64) {
-    if k <= 0.0 {
+    if k <= 0.0 || calm() {
         return;
     }
     let (a, page) = (buf.area, page_rgb());

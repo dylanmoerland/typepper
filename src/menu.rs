@@ -8,12 +8,13 @@ use std::time::Duration;
 
 use ratatui::buffer::Buffer;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Widget};
+use ratatui::widgets::{Block, BorderType, Clear, Widget};
 use web_time::Instant;
 
 use crate::best::{self, Bests};
 use crate::engine::Mode;
 use crate::fx::{Rgb, WHITE, blur, fire, hash, lerp, mix, page_rgb, rank_color};
+use crate::settings::{ROWS, Row, Settings};
 use crate::{pepper, theme, ui};
 
 pub struct Group {
@@ -194,6 +195,90 @@ impl Menu {
     }
 }
 
+/// The settings dialog over the menu.
+pub struct Dialog {
+    pub row: usize,
+    opened: Instant,
+    /// When a value last changed (it flashes).
+    pub changed: Option<Instant>,
+}
+
+impl Dialog {
+    pub fn new(now: Instant) -> Self {
+        Dialog {
+            row: 0,
+            opened: now,
+            changed: None,
+        }
+    }
+}
+
+const POP: f64 = 0.18; // the dialog springing open
+
+/// Settings over the menu: the menu fades back, the box springs open, and
+/// the selected row's value flashes when it changes.
+pub fn dialog(f: &mut Frame, d: &Dialog, s: &Settings, now: Instant) {
+    let area = f.area();
+    let k = (since(Some(d.opened), now) / POP).min(1.0);
+    let page = page_rgb();
+    for cell in f.buffer_mut().content.iter_mut() {
+        if let Color::Rgb(r, g, b) = cell.fg {
+            cell.fg = lerp((r, g, b), page, 0.6 * k);
+        }
+    }
+    let h = (ROWS.len() as u16 * 2 + 5).min(area.height);
+    let w = (44.0 * (0.7 + 0.3 * ease_out_back(k))).round() as u16;
+    let w = w.min(area.width);
+    let rect = Rect::new(
+        area.x + (area.width - w) / 2,
+        area.y + (area.height - h) / 2,
+        w,
+        h,
+    );
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(Color::White)
+        .title(Line::from(" SETTINGS ".bold()).centered());
+    let inner = block.inner(rect);
+    f.render_widget(Clear, rect);
+    f.render_widget(block, rect);
+    let flash = since(d.changed, now) < 0.15;
+    for (j, &row) in ROWS.iter().enumerate() {
+        let y = inner.y + 1 + 2 * j as u16;
+        if y >= inner.bottom() {
+            break;
+        }
+        let on = j == d.row;
+        let label = match row {
+            Row::Theme => "theme",
+            Row::Effects => "effects",
+            Row::Font => "font",
+        };
+        let line = Rect::new(inner.x + 2, y, inner.width.saturating_sub(4), 1);
+        let label = if on {
+            label.white().bold()
+        } else {
+            label.dark_gray()
+        };
+        f.render_widget(Line::from(label), line);
+        let value = format!("{:^16}", s.value(row));
+        let value = match on {
+            true if flash => value.black().on_white().bold(),
+            true => value.white().bold(),
+            false => value.gray(),
+        };
+        let arrow = |a: &'static str| if on { a.yellow().bold() } else { "  ".into() };
+        let right = Line::from(vec![arrow("◂ "), value, arrow(" ▸")]);
+        f.render_widget(right.right_aligned(), line);
+    }
+    let hint = match ROWS.get(d.row) {
+        Some(Row::Font) => "new font loads when you close this",
+        _ => "↑/↓ pick · ←/→ change · esc close",
+    };
+    let bottom = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+    f.render_widget(Line::from(hint.dark_gray()).centered(), bottom);
+}
+
 /// Ease out with a slight overshoot (~6%) before settling.
 fn ease_out_back(k: f64) -> f64 {
     let (c1, k) = (1.2, k - 1.0);
@@ -234,7 +319,8 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
         ..cards
     };
     for (j, w) in [(i, 1.0 - k), (i + 1, k)] {
-        if w > 0.01 {
+        // calm: the scenery stays still (it's all screen-wide motion)
+        if w > 0.01 && !crate::settings::calm() {
             (MENU[j.rem_euclid(4) as usize].scene)(f.buffer_mut(), area, focus, secs, w);
         }
     }
@@ -279,8 +365,8 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
     carousel(f.buffer_mut(), cards, m, bests, now, secs);
 
     dots(f.buffer_mut(), dot_row, m.scroll(now));
-    let theme = if theme::is_light() { "light" } else { "dark" };
-    let hint = format!("←/→ mode · ↑/↓ length · enter play · t theme: {theme}{QUIT}");
+    // padded so the scenery keeps a little distance from the text
+    let hint = format!("  ←/→ mode · ↑/↓ length · enter play · s settings{QUIT}  ");
     Line::from(hint.dark_gray())
         .centered()
         .render(help, f.buffer_mut());

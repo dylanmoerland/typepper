@@ -12,7 +12,8 @@ use web_time::Instant;
 
 use crate::best::{Bests, Outcome};
 use crate::engine::{Mode, Test, random_words};
-use crate::menu::{self, Menu};
+use crate::menu::{self, Dialog, Menu};
+use crate::settings::{ROWS, Settings};
 use crate::ui;
 
 pub enum Key {
@@ -38,6 +39,14 @@ pub struct App {
     /// Kept across tests so esc lands back on the mode you played.
     menu: Menu,
     bests: Bests,
+    settings: Settings,
+    /// The theme the terminal (or browser) asked for, for `auto`.
+    detected_light: bool,
+    /// The font and theme this page started with: the web renderer takes
+    /// both only at startup, so a different pick reloads the page.
+    loaded: (usize, bool),
+    /// The settings dialog, open over the menu.
+    dialog: Option<Dialog>,
     /// The finished test's result against your best (once it's been scored).
     outcome: Option<Outcome>,
     scored: bool,
@@ -51,10 +60,17 @@ pub struct App {
 impl App {
     pub fn new(demo: bool) -> Self {
         let now = Instant::now();
+        let detected_light = crate::theme::is_light();
+        let settings = Settings::load();
+        settings.apply(detected_light);
         App {
             screen: Screen::Title,
             menu: Menu::new(now),
             bests: Bests::load(),
+            settings,
+            detected_light,
+            loaded: (settings.font, crate::theme::is_light()),
+            dialog: None,
             outcome: None,
             scored: false,
             since: now,
@@ -70,6 +86,27 @@ impl App {
         let mut next = None;
         // tab mid-test restarts at once; every other screen change dissolves
         let mut instant = false;
+        if let (Screen::Title, Some(d)) = (&self.screen, &mut self.dialog) {
+            match key {
+                Key::Up => d.row = (d.row + ROWS.len() - 1) % ROWS.len(),
+                Key::Down => d.row = (d.row + 1) % ROWS.len(),
+                Key::Left | Key::Right => {
+                    let dir = if matches!(key, Key::Left) { -1 } else { 1 };
+                    self.settings.change(ROWS[d.row], dir);
+                    self.settings.apply(self.detected_light);
+                    self.settings.save();
+                    d.changed = Some(now);
+                }
+                Key::Esc | Key::Enter | Key::Char('s') => {
+                    self.dialog = None;
+                    if (self.settings.font, crate::theme::is_light()) != self.loaded {
+                        reload();
+                    }
+                }
+                _ => {}
+            }
+            return false;
+        }
         match (&mut self.screen, key) {
             (Screen::Title, Key::Esc) => return true,
             // zen has no clock: esc is how it ends
@@ -84,7 +121,7 @@ impl App {
             }
             // enter was pressed: the card is springing, the test is coming
             (Screen::Title, _) if self.menu.pressing() => {}
-            (Screen::Title, Key::Char('t')) => crate::theme::toggle(),
+            (Screen::Title, Key::Char('s')) => self.dialog = Some(Dialog::new(now)),
             (Screen::Title, Key::Left) => self.menu.swipe(-1, now),
             (Screen::Title, Key::Right) => self.menu.swipe(1, now),
             (Screen::Title, Key::Up) => self.menu.length(-1, now),
@@ -157,7 +194,12 @@ impl App {
     pub fn draw(&mut self, f: &mut Frame) {
         let now = Instant::now();
         match &self.screen {
-            Screen::Title => menu::draw(f, &self.menu, &self.bests, now),
+            Screen::Title => {
+                menu::draw(f, &self.menu, &self.bests, now);
+                if let Some(d) = &self.dialog {
+                    menu::dialog(f, d, &self.settings, now);
+                }
+            }
             Screen::Practice(test) => ui::draw(f, test, self.outcome),
         }
         if self.bot.is_some() {
@@ -179,6 +221,15 @@ impl App {
         self.since = now;
         (self.outcome, self.scored) = (None, false);
         self.fade = self.frame.take().map(|b| (b, now));
+    }
+}
+
+/// A new font (or the canvas edge color for a new theme) only takes after a
+/// fresh start on the web (see the web `main`); the terminal needs nothing.
+fn reload() {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(w) = ratzilla::web_sys::window() {
+        let _ = w.location().reload();
     }
 }
 
