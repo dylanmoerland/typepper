@@ -38,6 +38,17 @@ enum Screen {
     Lava(Lava),
 }
 
+impl Screen {
+    /// The test being played (or just finished) on this screen.
+    fn test(&self) -> Option<&Test> {
+        match self {
+            Screen::Practice(t) => Some(t),
+            Screen::Lava(l) => Some(&l.test),
+            Screen::Title => None,
+        }
+    }
+}
+
 pub struct App {
     screen: Screen,
     /// Kept across tests so esc lands back on the mode you played.
@@ -88,8 +99,6 @@ impl App {
     pub fn key(&mut self, key: Key) -> bool {
         let now = Instant::now();
         let mut next = None;
-        // tab mid-test restarts at once; every other screen change dissolves
-        let mut instant = false;
         if let (Screen::Title, Some(d)) = (&self.screen, &mut self.dialog) {
             match key {
                 Key::Up => d.row = (d.row + ROWS.len() - 1) % ROWS.len(),
@@ -108,6 +117,18 @@ impl App {
                     }
                 }
                 _ => {}
+            }
+            return false;
+        }
+        // in any test: tab restarts (at once mid-test; every other screen change
+        // dissolves), enter on the results plays again
+        if let Some((mode, done)) = self.screen.test().map(|t| (t.mode, t.finished.is_some()))
+            && (matches!(key, Key::Tab) || matches!(key, Key::Enter) && done)
+        {
+            let instant = matches!(key, Key::Tab) && !done;
+            self.go(practice(mode), now);
+            if instant {
+                self.fade = None;
             }
             return false;
         }
@@ -135,18 +156,11 @@ impl App {
             (Screen::Title, Key::Enter | Key::Char(' ')) => self.menu.press(now),
             (Screen::Title, _) => {}
             (Screen::Lava(l), key) => match key {
-                Key::Tab => next = Some(practice(l.test.mode)),
-                Key::Enter if l.test.finished.is_some() => next = Some(practice(l.test.mode)),
                 Key::Backspace => l.backspace(),
                 Key::Char(c) => l.key(c, now),
                 _ => {}
             },
             (Screen::Practice(test), key) => match key {
-                Key::Tab => {
-                    instant = test.finished.is_none();
-                    next = Some(practice(test.mode));
-                }
-                Key::Enter if test.finished.is_some() => next = Some(practice(test.mode)),
                 Key::Backspace => test.backspace(now),
                 Key::Char(c) => test.type_char(c, now),
                 _ => {}
@@ -154,9 +168,6 @@ impl App {
         }
         if let Some(s) = next {
             self.go(s, now);
-            if instant {
-                self.fade = None;
-            }
         }
         false
     }
@@ -188,15 +199,21 @@ impl App {
                 }
                 test.tick(now);
             }
-            Screen::Lava(l) => l.tick(now),
+            Screen::Lava(l) => {
+                if let Some(bot) = &mut self.bot {
+                    bot.drive_lava(l, now);
+                    if l.test
+                        .finished
+                        .is_some_and(|f| now - f > Duration::from_secs(4))
+                    {
+                        next = Some(practice(l.test.mode));
+                    }
+                }
+                l.tick(now);
+            }
         }
         // finished: dissolve into results, and score it (demo runs don't count)
-        let test = match &self.screen {
-            Screen::Practice(t) => Some(t),
-            Screen::Lava(l) => Some(&l.test),
-            Screen::Title => None,
-        };
-        if let Some(test) = test
+        if let Some(test) = self.screen.test()
             && let Some(end) = test.finished
             && !self.scored
         {
@@ -235,7 +252,12 @@ impl App {
                 false => self.fade = None,
             }
         }
-        self.frame = Some(f.buffer_mut().clone());
+        // keep the frame for the next dissolve, reusing last frame's memory
+        let buf = f.buffer_mut();
+        match &mut self.frame {
+            Some(old) if old.area == buf.area => old.content.clone_from(&buf.content),
+            _ => self.frame = Some(buf.clone()),
+        }
     }
 
     fn go(&mut self, screen: Screen, now: Instant) {
@@ -300,8 +322,27 @@ impl Bot {
             } else if let Some(&c) = t.target.get(t.typed.len()) {
                 t.type_char(c, at);
             }
-            let wpm = (40.0 + 8.0 * t.elapsed(at).as_secs_f64()).min(180.0);
-            self.next = at + Duration::from_secs_f64(12.0 / wpm * rng.random_range(0.7..1.3));
+            self.next = after(t, at);
         }
     }
+
+    /// FLOOR IS LAVA: finishes the word it's on, or starts the lowest one.
+    fn drive_lava(&mut self, l: &mut Lava, now: Instant) {
+        if l.test.started.is_none() && self.next + Duration::from_millis(500) < now {
+            self.next = now;
+        }
+        while self.next <= now && l.test.finished.is_none() {
+            let at = self.next;
+            if let Some(c) = l.next_char() {
+                l.key(c, at);
+            }
+            self.next = after(&l.test, at);
+        }
+    }
+}
+
+/// When the autopilot's next key falls: 40 → 180 wpm over the run, jittered.
+fn after(t: &Test, at: Instant) -> Instant {
+    let wpm = (40.0 + 8.0 * t.elapsed(at).as_secs_f64()).min(180.0);
+    at + Duration::from_secs_f64(12.0 / wpm * rand::rng().random_range(0.7..1.3))
 }

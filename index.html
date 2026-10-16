@@ -57,7 +57,8 @@
     [data-theme="light"] { --bg: #faf7f0; --ink: #2a2630; --dim: #8a8590; --line: #e6e0d4; --chip: #efe9de; --hot: #c25a00; }
     html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
     body { display: flex; flex-direction: column; }
-    #game { flex: 1; min-height: 0; }
+    /* touch-action: swipes and taps are the game's, not scroll, zoom or back */
+    #game { flex: 1; min-height: 0; touch-action: none; user-select: none; }
     #game canvas:focus { outline: none; }
     /* read by search engines and screen readers; the game itself is a canvas */
     .sr-only {
@@ -166,14 +167,38 @@
       const PAD = " ";
       const reset = () => { kb.value = PAD; kb.setSelectionRange(PAD.length, PAD.length); };
       reset();
-      kb.addEventListener("input", () => {
-        const v = kb.value;
-        if (v.length < PAD.length) send("Backspace");
-        else for (const ch of v.slice(PAD.length)) send(ch);
-        reset();
+      // Keyboards like Gboard compose a whole word in the field: send only
+      // what changed since the last input (new letters, or backspaces for an
+      // autocorrect), and clear the field once the word is done, not mid-word,
+      // or the keyboard writes it back and the letters arrive twice.
+      let sent = "";
+      kb.addEventListener("input", (e) => {
+        if (kb.value.length < PAD.length) {
+          send("Backspace");
+          sent = "";
+          return reset();
+        }
+        const text = kb.value.slice(PAD.length);
+        let same = 0;
+        while (same < sent.length && sent[same] === text[same]) same++;
+        for (let k = sent.length; k > same; k--) send("Backspace");
+        for (const ch of text.slice(same)) send(ch);
+        sent = text;
+        if (!e.isComposing) { sent = ""; reset(); }
       });
+      kb.addEventListener("compositionend", () => { sent = ""; reset(); });
+      // keys a hardware keyboard (iPad) sends that aren't text: hand them over
+      const KEYS = ["Escape", "Tab", "Enter", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "F2"];
       kb.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") { e.preventDefault(); send("Enter"); }
+        if (KEYS.includes(e.key)) { e.preventDefault(); send(e.key); }
+      });
+      // ...and anything typed before the field has focus
+      addEventListener("keydown", (e) => {
+        if (e.target !== document.body) return;
+        if (KEYS.includes(e.key) || e.key.length === 1 || e.key === "Backspace") {
+          e.preventDefault();
+          send(e.key);
+        }
       });
       const keyboard = () => kb.focus({ preventScroll: true });
       let start = null;

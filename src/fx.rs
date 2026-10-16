@@ -37,6 +37,34 @@ fn pepper_body(t: &Test) -> Color {
 
 use crate::settings::calm;
 
+/// A row of chars from `(x, y)`, clipped like `put`.
+pub fn put_str(
+    buf: &mut Buffer,
+    x: i32,
+    y: i32,
+    text: impl IntoIterator<Item = char>,
+    style: Style,
+) {
+    for (i, ch) in text.into_iter().enumerate() {
+        put(buf, x + i as i32, y, ch.encode_utf8(&mut [0; 4]), style);
+    }
+}
+
+/// One cell of lava (the game's pool and the menu's): its glyph and heat for
+/// `fire`. `top` is the surface row; `secs` drives the bubbling (fixed when calm).
+pub fn lava_cell(x: u16, y: u16, top: bool, deep: u16, secs: f64) -> (&'static str, f64) {
+    let secs = if calm() { 0.0 } else { secs };
+    let n = hash(x as u64, y as u64, (secs * 6.0) as u64) as f64 / 255.0;
+    match top {
+        true if (x as f64 * 0.5 + secs * 3.0).sin() > 0.3 => ("~", 0.85 + 0.15 * n),
+        true => ("≈", 0.85 + 0.15 * n),
+        false => (
+            ["▓", "▒", "▓", "█"][(n * 3.99) as usize],
+            0.75 - 0.08 * deep.min(4) as f64 + 0.15 * n,
+        ),
+    }
+}
+
 /// Clipped write: effects can wander off-screen without panicking.
 pub fn put(buf: &mut Buffer, x: i32, y: i32, sym: &str, style: Style) {
     let a = buf.area;
@@ -473,7 +501,7 @@ const MISS: f64 = 0.12; // wrong key shake
 const CRUMB: f64 = 0.45; // backspaced letter falling away
 const WORD_SWEEP: f64 = 0.16;
 const SPARKLE: f64 = 0.4;
-const POPUP: f64 = 0.7; // +points floating up
+pub const POPUP: f64 = 0.7; // +points floating up
 pub const PUNCH: f64 = 0.3; // multiplier step
 
 /// Every correct key pops: its cell flashes in the rank color, then settles.
@@ -611,8 +639,6 @@ pub fn word_sweep(
 
 /// +points float up off each finished word.
 pub fn points(buf: &mut Buffer, t: &Test, now: Instant, pos: impl Fn(usize) -> Option<(u16, u16)>) {
-    let page = page_rgb();
-    let rgb = mix(RANK_RGB[t.rank.max(2)], WHITE, 0.4);
     for w in t.words_done.iter().rev() {
         let age = since(Some(w.at), now).as_secs_f64();
         if age > POPUP {
@@ -621,17 +647,17 @@ pub fn points(buf: &mut Buffer, t: &Test, now: Instant, pos: impl Fn(usize) -> O
         let Some((x, y)) = pos((w.start + w.end) / 2) else {
             continue;
         };
-        let text = format!("+{}", w.points);
-        let k = age / POPUP;
-        let (x0, y0) = (
-            x as i32 - text.len() as i32 / 2,
-            y as i32 - 1 - (k * 2.5) as i32,
-        );
-        let style = Style::new().fg(lerp(rgb, page, k * k)).bold();
-        for (j, ch) in text.chars().enumerate() {
-            put(buf, x0 + j as i32, y0, &ch.to_string(), style);
-        }
+        popup(buf, x as i32, y as i32, w.points, t.rank, age / POPUP);
     }
+}
+
+/// "+N" rising off `(x, y)` (centered on x) and fading; `k` is age / `POPUP`.
+pub fn popup(buf: &mut Buffer, x: i32, y: i32, points: u64, rank: usize, k: f64) {
+    let text = format!("+{points}");
+    let rgb = mix(RANK_RGB[rank.max(2)], WHITE, 0.4);
+    let style = Style::new().fg(lerp(rgb, page_rgb(), k * k)).bold();
+    let y = y - 1 - (k * 2.5) as i32;
+    put_str(buf, x - text.len() as i32 / 2, y, text.chars(), style);
 }
 
 /// The multiplier stepping up: a ring of dust bursts out around `at`.
@@ -678,9 +704,7 @@ pub fn go_burst(
         put_behind(buf, sx.round() as i32, sy.round() as i32, sym, style);
     }
     let gy = y as i32 - 1 - (k * 1.5) as i32;
-    for (j, ch) in "GO!".chars().enumerate() {
-        put(buf, x as i32 + j as i32, gy, &ch.to_string(), style);
-    }
+    put_str(buf, x as i32, gy, "GO!".chars(), style);
 }
 
 /// Survival under 3s of fuel: a lub-dub heartbeat (0..1), quicker under 1.5s.

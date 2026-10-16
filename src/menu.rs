@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use ratatui::buffer::Buffer;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Clear, Widget};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Widget, Wrap};
 use web_time::Instant;
 
 use crate::best::{self, Bests};
@@ -65,13 +65,18 @@ pub const MENU: [Group; 5] = [
 ];
 
 pub fn group(m: Mode) -> &'static Group {
-    &MENU[match m {
+    &MENU[slot(m)]
+}
+
+/// Which card a mode is on.
+fn slot(m: Mode) -> usize {
+    match m {
         Mode::Words(_) => 0,
         Mode::Time(_) => 1,
         Mode::Zen => 2,
         Mode::Survival => 3,
         Mode::Lava(_) => 4,
-    }]
+    }
 }
 
 /// "BLITZ 30s", "ZEN".
@@ -228,12 +233,7 @@ const POP: f64 = 0.18; // the dialog springing open
 pub fn dialog(f: &mut Frame, d: &Dialog, s: &Settings, now: Instant) {
     let area = f.area();
     let k = (since(Some(d.opened), now) / POP).min(1.0);
-    let page = page_rgb();
-    for cell in f.buffer_mut().content.iter_mut() {
-        if let Color::Rgb(r, g, b) = cell.fg {
-            cell.fg = lerp((r, g, b), page, 0.6 * k);
-        }
-    }
+    dim(f.buffer_mut(), 0.6 * k);
     let h = (ROWS.len() as u16 * 2 + 5).min(area.height);
     let w = (44.0 * (0.7 + 0.3 * ease_out_back(k))).round() as u16;
     let w = w.min(area.width);
@@ -287,6 +287,31 @@ pub fn dialog(f: &mut Frame, d: &Dialog, s: &Settings, now: Instant) {
     f.render_widget(Line::from(hint.dark_gray()).centered(), bottom);
 }
 
+/// Lines `text` takes when word-wrapped to `width` (like `Wrap { trim: true }`).
+fn wrapped_rows(text: &str, width: usize) -> u16 {
+    let (mut rows, mut line) = (1, 0);
+    for word in text.split(' ') {
+        let n = word.chars().count();
+        if line > 0 && line + 1 + n > width {
+            rows += 1;
+            line = n;
+        } else {
+            line += n + usize::from(line > 0);
+        }
+    }
+    rows
+}
+
+/// Fade everything already drawn toward the page, `k` 0..1 (behind a dialog).
+fn dim(buf: &mut Buffer, k: f64) {
+    let page = page_rgb();
+    for cell in buf.content.iter_mut() {
+        if let Color::Rgb(r, g, b) = cell.fg {
+            cell.fg = lerp((r, g, b), page, k);
+        }
+    }
+}
+
 /// Ease out with a slight overshoot (~6%) before settling.
 fn ease_out_back(k: f64) -> f64 {
     let (c1, k) = (1.2, k - 1.0);
@@ -299,7 +324,7 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
     // logo a bit above the middle, the 3D pepper gets everything above it;
     // on short screens the menu below keeps its room and the pepper shrinks
     let below = (area.height.saturating_sub(5) as f64 * 0.6) as u16;
-    let below = below.max(16);
+    let below = below.max(18);
     let [stage, logo, rest] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(5),
@@ -310,7 +335,7 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
-        Constraint::Length(9),
+        Constraint::Length(11),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(2), // cards ride a bit above the middle
@@ -488,23 +513,35 @@ fn draw_card(card: &mut Buffer, m: &Menu, i: usize, best: Option<String>, now: I
             _ if sel && m.pressing() => Color::White,
             true => lerp(WHITE, g.color, ((age - WAIT_TITLE) / GLINT).clamp(0.0, 1.0)),
             false => color,
-        });
+        })
+        // breathing room so text never touches the border
+        .padding(Padding::horizontal(2));
     let inner = block.inner(area);
     block.render(area, card);
-    // padding gives way first on the smaller side cards
-    let [_, title, _, blurb, _, len, best_row] = Layout::vertical([
+    // a blurb too long for the card (on a phone) wraps, taking the rows it
+    // needs (up to three); a row of air always separates the parts, and the
+    // leftover space centers them (it gives way first on the smaller side cards)
+    let blurb_rows = wrapped_rows(g.blurb, inner.width as usize).min(3);
+    let [_, title, _, blurb, _, len, best_row, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(1),
-        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(blurb_rows),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
     ])
     .areas(inner);
 
-    // the new card's title decodes: each letter scrambles, then locks in, left to right
+    // the new card's title decodes: each letter scrambles, then locks in, left
+    // to right; letter-spaced when it fits, plain when the card is narrow
     let n = g.name.chars().count() as f64;
+    let gap = if 2 * g.name.chars().count() > inner.width as usize {
+        ""
+    } else {
+        " "
+    };
     let spaced: Vec<Span> = g
         .name
         .chars()
@@ -518,7 +555,7 @@ fn draw_card(card: &mut Buffer, m: &Menu, i: usize, best: Option<String>, now: I
                 }
                 false => c,
             };
-            [c.to_string().fg(color).bold(), " ".into()]
+            [c.to_string().fg(color).bold(), gap.into()]
         })
         .collect();
     Line::from(spaced).centered().render(title, card);
@@ -533,7 +570,9 @@ fn draw_card(card: &mut Buffer, m: &Menu, i: usize, best: Option<String>, now: I
     if k < 1.0 {
         typed.push('▌');
     }
-    Line::from(typed.gray()).centered().render(blurb, card);
+    Paragraph::new(Line::from(typed.gray()).centered())
+        .wrap(Wrap { trim: true })
+        .render(blurb, card);
 
     match g.modes {
         [_] => Line::from("endless".dark_gray())
@@ -541,7 +580,8 @@ fn draw_card(card: &mut Buffer, m: &Menu, i: usize, best: Option<String>, now: I
             .render(len, card),
         modes => {
             let chip = if sel { m.chip_at(now) } else { m.len[i] as f64 };
-            options(card, len, modes, chip, color);
+            let labels: Vec<String> = modes.iter().map(|m| m.to_string()).collect();
+            options(card, len, &labels, chip, color);
         }
     }
     if let Some(b) = best {
@@ -553,8 +593,8 @@ fn draw_card(card: &mut Buffer, m: &Menu, i: usize, best: Option<String>, now: I
 
 /// Length options in a row, with a highlight chip at option `chip`; a
 /// fractional `chip` puts it partway between two options, sliding.
-fn options(card: &mut Buffer, row: Rect, modes: &[Mode], chip: f64, color: Color) {
-    let labels: Vec<String> = modes.iter().map(|m| format!(" {m} ")).collect();
+fn options(card: &mut Buffer, row: Rect, labels: &[String], chip: f64, color: Color) {
+    let labels: Vec<String> = labels.iter().map(|l| format!(" {l} ")).collect();
     let total: usize = labels.iter().map(|l| l.chars().count() + 1).sum::<usize>() - 1;
     let x0 = row.x as f64 + (row.width as f64 - total as f64) / 2.0;
     let mut starts = Vec::new();
@@ -855,11 +895,13 @@ fn lava(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
         let near = y / fall; // words glow hotter as they near the lava
         let c = mix((150, 150, 150), (255, 110, 40), near * near);
         for (j, ch) in word.chars().enumerate() {
+            let mut utf8 = [0; 4];
+            let sym = ch.encode_utf8(&mut utf8);
             dab(
                 buf,
                 x + j as i32,
                 area.y as i32 + y as i32,
-                &ch.to_string(),
+                sym,
                 c,
                 0.55 * w,
             );
@@ -868,15 +910,8 @@ fn lava(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
     for up in 0..pool {
         let y = area.bottom() - 1 - up;
         for x in area.left()..area.right() {
-            let n = hash(x as u64, y as u64, (secs * 6.0) as u64) as f64 / 255.0;
-            let sym = match up + 1 == pool {
-                true if ((x as f64 * 0.5 + secs * 3.0).sin()) > 0.0 => "~",
-                true => "≈",
-                false => ["▓", "▒", "▓", "█"][(n * 3.99) as usize],
-            };
-            buf[(x, y)]
-                .set_symbol(sym)
-                .set_fg(fire((0.5 + 0.4 * n) * w));
+            let (sym, v) = crate::fx::lava_cell(x, y, up + 1 == pool, pool - 1 - up, secs);
+            buf[(x, y)].set_symbol(sym).set_fg(fire(v * w));
         }
     }
 }
@@ -884,6 +919,19 @@ fn lava(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blurbs_wrap_like_the_paragraph() {
+        assert_eq!(wrapped_rows("beat the clock", 40), 1);
+        assert_eq!(
+            wrapped_rows("type the words before they hit the lava", 26),
+            2
+        );
+        assert_eq!(
+            wrapped_rows("feed the fuel · it drains faster every level", 22),
+            3
+        );
+    }
 
     #[test]
     fn blur_steps_down_the_ramp() {

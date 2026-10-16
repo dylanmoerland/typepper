@@ -30,6 +30,13 @@ impl Default for Mode {
     }
 }
 
+impl Mode {
+    /// Endless modes scored by words survived, with levels.
+    pub fn leveled(self) -> bool {
+        matches!(self, Mode::Survival | Mode::Lava(_))
+    }
+}
+
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -112,9 +119,10 @@ const WORDS: &str = include_str!("words.txt");
 /// `n` random common English words.
 pub fn random_words(n: usize) -> Vec<&'static str> {
     use rand::seq::IndexedRandom;
-    let words: Vec<&str> = WORDS.split_whitespace().collect();
+    static LIST: std::sync::LazyLock<Vec<&str>> =
+        std::sync::LazyLock::new(|| WORDS.split_whitespace().collect());
     let mut rng = rand::rng();
-    (0..n).map(|_| *words.choose(&mut rng).unwrap()).collect()
+    (0..n).map(|_| *LIST.choose(&mut rng).unwrap()).collect()
 }
 
 /// Rank from which time counts as "hot" on the results screen.
@@ -216,9 +224,7 @@ impl Test {
         if self.finished.is_some() || self.typed.len() >= self.target.len() {
             return;
         }
-        self.started.get_or_insert(now);
-        self.cool(now);
-        self.keystrokes += 1;
+        self.key_down(now);
         if self.target[self.typed.len()] == c {
             // instant wpm / 60: 12 / gap / 60
             let speed = self.last_key.map_or(1.0, |t| {
@@ -253,19 +259,16 @@ impl Test {
                 self.word_from = (i + 1, self.score, self.errors);
             }
         } else {
-            self.missed(now);
+            self.mistake(now);
         }
-        self.last_key = Some(now);
-        self.update_rank(now);
+        self.key_up(now);
         self.typed.push(c);
         self.frontier = self.frontier.max(self.typed.len());
+        let low = self.target.len() - self.typed.len() < 400;
         match self.mode {
             Mode::Words(_) if self.typed.len() == self.target.len() => self.finish(now),
-            Mode::Words(_) => {}
-            // lava feeds the text itself, one hit at a time
-            Mode::Lava(_) => {}
-            // the rest never run out of words: keep a few lines queued
-            _ if self.target.len() - self.typed.len() < 400 => {
+            // endless modes keep a few lines queued (lava feeds its own text)
+            Mode::Time(_) | Mode::Zen | Mode::Survival if low => {
                 self.target.push(' ');
                 self.target.extend(random_words(50).join(" ").chars());
             }
@@ -273,15 +276,31 @@ impl Test {
         }
     }
 
+    /// Append `c` to the text and type it (lava: the text is what you hit).
+    pub fn feed(&mut self, c: char, now: Instant) {
+        self.target.push(c);
+        self.type_char(c, now);
+    }
+
     /// A wrong key that doesn't move the cursor (lava: no word to type it into).
     pub fn miss(&mut self, now: Instant) {
         if self.finished.is_some() {
             return;
         }
+        self.key_down(now);
+        self.mistake(now);
+        self.key_up(now);
+    }
+
+    /// What every keystroke does first: start the clock, cool, count it.
+    fn key_down(&mut self, now: Instant) {
         self.started.get_or_insert(now);
         self.cool(now);
         self.keystrokes += 1;
-        self.missed(now);
+    }
+
+    /// ...and last.
+    fn key_up(&mut self, now: Instant) {
         self.last_key = Some(now);
         self.update_rank(now);
     }
@@ -292,7 +311,7 @@ impl Test {
         self.update_rank(now);
     }
 
-    fn missed(&mut self, now: Instant) {
+    fn mistake(&mut self, now: Instant) {
         self.last_points = 0;
         self.break_combo(now);
         self.errors += 1;
@@ -344,7 +363,7 @@ impl Test {
         self.combo >= 20 * MULT_STEPS
     }
 
-    /// Survival level, from 1.
+    /// Level in the endless word modes (survival, lava), from 1.
     pub fn level(&self) -> u32 {
         1 + self.words / LEVEL_WORDS
     }

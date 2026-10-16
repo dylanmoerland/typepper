@@ -150,10 +150,8 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
             Mode::Words(n) => {
                 format!("{}/{n}", t.typed.iter().filter(|c| **c == ' ').count()).yellow()
             }
-            Mode::Zen => format!("{} words", t.words).yellow(),
+            Mode::Zen | Mode::Lava(_) => format!("{} words", t.words).yellow(),
             Mode::Survival => fuel_gauge(t, fx::fuel_beat(t, now)),
-            // lava draws its own screen (see `lava.rs`)
-            Mode::Lava(_) => format!("{} words", t.words).yellow(),
         };
         let stats = Line::from(vec![
             progress.bold(),
@@ -466,8 +464,12 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         Constraint::Length(1),
     ])
     .areas(area);
-    let [stage, info] =
-        Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)]).areas(top);
+    // phones: no room for the 3D pepper beside the score, and shorter lines
+    let narrow = area.width < 60;
+    let [stage, info] = match narrow {
+        true => [Rect::default(), top],
+        false => Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)]).areas(top),
+    };
     let [_, label, _, score, _, peak, best_row, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(1), // SCORE
@@ -503,16 +505,18 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         .map(|r| Line::from(solid(r, color)))
         .collect();
     f.render_widget(Paragraph::new(digits).centered(), score);
-    let peak_line = Line::from(vec![
+    let mut peak_line = Line::from(vec![
         "peak ".dark_gray(),
         RANKS[t.peak_rank].name.fg(color).bold(),
-        format!(
+    ]);
+    if !narrow {
+        let hot = format!(
             " · {:.1}s at {}+",
             t.hot_secs,
             RANKS[HOT].name.to_lowercase()
-        )
-        .dark_gray(),
-    ]);
+        );
+        peak_line.push_span(hot.dark_gray());
+    }
     if secs >= PEAK_AT {
         f.render_widget(peak_line.centered(), peak);
     }
@@ -550,7 +554,12 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         ("wpm", t.wpm(now), "", Color::Yellow),
         ("acc", t.accuracy(), "%", Color::Green),
         ("raw", t.raw_wpm(now), "", Color::Cyan),
-        ("best combo", t.best_combo as f64, "×", Color::Magenta),
+        (
+            if narrow { "combo" } else { "best combo" },
+            t.best_combo as f64,
+            "×",
+            Color::Magenta,
+        ),
     ];
     // cards drop in one after another, their numbers counting up
     for (j, ((label, value, unit, c), a)) in stats.into_iter().zip(card_areas).enumerate() {
@@ -614,16 +623,19 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     f.render_widget(chart_widget, chart);
 
     let mode = match t.mode {
-        Mode::Survival | Mode::Lava(_) => format!("{} lv{}", menu::label(t.mode), t.level()),
+        m if m.leveled() => format!("{} lv{}", menu::label(m), t.level()),
         m => menu::label(m),
     };
-    let line = format!(
-        "{mode} · {:.1}s · {} correct · {} wrong · {} slips",
-        took,
-        t.correct(),
-        t.typed.len() - t.correct(),
-        t.errors
-    );
+    let line = match narrow {
+        true => format!("{mode} · {took:.1}s · {} slips", t.errors),
+        false => format!(
+            "{mode} · {:.1}s · {} correct · {} wrong · {} slips",
+            took,
+            t.correct(),
+            t.typed.len() - t.correct(),
+            t.errors
+        ),
+    };
     f.render_widget(Line::from(line).dark_gray().centered(), details);
     f.render_widget(
         Line::from(match touch() {
