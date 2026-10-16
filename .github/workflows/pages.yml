@@ -1,9 +1,11 @@
 # The web version: built with Trunk, published at https://typepper.com/
+# It ships with each release, so the browser game matches the binaries.
 name: pages
 
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
+  # site-only fixes: Actions → pages → Run workflow (pick a branch or tag)
   workflow_dispatch:
 
 permissions:
