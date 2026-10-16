@@ -1,14 +1,9 @@
 mod app;
-mod cast;
 mod engine;
-mod fight;
-mod foes;
 mod fx;
-mod mods;
+mod menu;
 mod pepper;
-mod run;
 mod theme;
-mod toon;
 mod ui;
 
 use app::{App, Key};
@@ -47,6 +42,8 @@ fn main() -> std::io::Result<()> {
                     KeyCode::Enter => Some(Key::Enter),
                     KeyCode::Left => Some(Key::Left),
                     KeyCode::Right => Some(Key::Right),
+                    KeyCode::Up => Some(Key::Up),
+                    KeyCode::Down => Some(Key::Down),
                     KeyCode::Backspace => Some(Key::Backspace),
                     KeyCode::Char(c) => Some(Key::Char(c)),
                     _ => None,
@@ -109,6 +106,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 KeyCode::Enter => Key::Enter,
                 KeyCode::Left => Key::Left,
                 KeyCode::Right => Key::Right,
+                KeyCode::Up => Key::Up,
+                KeyCode::Down => Key::Down,
                 KeyCode::Backspace => Key::Backspace,
                 KeyCode::Char(c) if !k.ctrl && !k.alt => Key::Char(c),
                 _ => return,

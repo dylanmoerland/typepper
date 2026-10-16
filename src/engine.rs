@@ -7,20 +7,15 @@ use web_time::Instant;
 pub enum Mode {
     Time(u64),
     Words(usize),
+    /// No clock, endless words; esc ends it.
+    Zen,
+    /// Endless words on a fuel clock that drains faster every level.
+    Survival,
 }
-
-pub const MODES: [Mode; 6] = [
-    Mode::Time(15),
-    Mode::Time(30),
-    Mode::Time(60),
-    Mode::Words(10),
-    Mode::Words(25),
-    Mode::Words(50),
-];
 
 impl Default for Mode {
     fn default() -> Self {
-        MODES[1]
+        Mode::Time(30)
     }
 }
 
@@ -29,6 +24,8 @@ impl fmt::Display for Mode {
         match self {
             Mode::Time(s) => write!(f, "{s}s"),
             Mode::Words(n) => write!(f, "{n}w"),
+            Mode::Zen => write!(f, "zen"),
+            Mode::Survival => write!(f, "survival"),
         }
     }
 }
@@ -112,39 +109,24 @@ pub const HOT: usize = 4;
 
 const RANK_HYSTERESIS: f64 = 4.0;
 
-/// Rules of one test. Defaults are the practice game; sauces and curses
-/// (see `mods.rs`) tweak them for roguelike fights.
-pub struct Knobs {
-    /// Steady state heat = (wpm² / 600) · gain/1.2 / decay, so by default
-    /// 40wpm ≈ poblano, 60 ≈ jalapeño, 90 ≈ serrano, 110 ≈ habanero, 135+ ≈ reaper.
-    pub heat_gain: f64,
-    /// Per second, exponential.
-    pub heat_decay: f64,
-    /// Heat kept after a mistake.
-    pub miss_keep: f64,
-    /// Multiplier steps above ×1, one per 20 combo.
-    pub mult_steps: u32,
-    /// First miss in each word doesn't break combo or cool you down.
-    pub forgive_first_miss: bool,
-    /// Count a heal every N combo (`Test::heals`).
-    pub heal_every: Option<u32>,
-    /// Only this many upcoming chars are visible.
-    pub fog: Option<usize>,
-}
+/// Steady state heat = (wpm² / 600) · gain/1.2 / decay, so
+/// 40wpm ≈ poblano, 60 ≈ jalapeño, 90 ≈ serrano, 110 ≈ habanero, 135+ ≈ reaper.
+const HEAT_GAIN: f64 = 1.2;
+/// Per second, exponential.
+const HEAT_DECAY: f64 = 0.33;
+/// Heat kept after a mistake.
+const MISS_KEEP: f64 = 0.4;
+/// Multiplier steps above ×1, one per 20 combo.
+const MULT_STEPS: u32 = 3;
 
-impl Default for Knobs {
-    fn default() -> Self {
-        Knobs {
-            heat_gain: 1.2,
-            heat_decay: 0.33,
-            miss_keep: 0.4,
-            mult_steps: 3,
-            forgive_first_miss: false,
-            heal_every: None,
-            fog: None,
-        }
-    }
-}
+// ponytail: survival tuned on paper (lv5 ≈ 70wpm, lv10 ≈ 120wpm to break even); playtest
+/// Survival: starting (and maximum) fuel in seconds.
+pub const FUEL: f64 = 10.0;
+/// Survival: fuel each correct word adds.
+const REFILL: f64 = 1.5;
+/// Survival: words per level; each level drains this much faster.
+const LEVEL_WORDS: u32 = 10;
+const DRAIN_STEP: f64 = 1.12;
 
 /// One typing test. Pure state: every time-dependent call takes `now`.
 #[derive(Default)]
@@ -175,11 +157,15 @@ pub struct Test {
     pub jalapenos: Vec<Instant>,
     /// Correct keystrokes: when, and which target index (for caret sparks).
     pub hits: Vec<(Instant, usize)>,
-    pub knobs: Knobs,
-    /// Heals earned through `Knobs::heal_every`.
-    pub heals: u32,
+    /// Last combo milestone (every 50) and when.
+    pub milestone: Option<(u32, Instant)>,
+    /// Words finished with a correct space (each counted once).
+    pub words: u32,
+    /// Survival seconds left.
+    pub fuel: f64,
+    /// Furthest the caret has been, so retyping a space doesn't refill twice.
+    frontier: usize,
     last_tick: Option<Instant>,
-    word_missed: bool,
 }
 
 impl Test {
@@ -187,6 +173,7 @@ impl Test {
         Self {
             mode,
             target: words.join(" ").chars().collect(),
+            fuel: FUEL,
             ..Default::default()
         }
     }
@@ -203,34 +190,24 @@ impl Test {
             let speed = self.last_key.map_or(1.0, |t| {
                 (0.2 / now.saturating_duration_since(t).as_secs_f64().max(0.01)).clamp(0.5, 3.0)
             });
-            self.heat = (self.heat + self.knobs.heat_gain * speed).min(100.0);
+            self.heat = (self.heat + HEAT_GAIN * speed).min(100.0);
             self.combo += 1;
             self.best_combo = self.best_combo.max(self.combo);
             self.hits.push((now, self.typed.len()));
             if self.combo.is_multiple_of(50) {
+                self.milestone = Some((self.combo, now));
                 self.launch(now);
             }
-            if self
-                .knobs
-                .heal_every
-                .is_some_and(|n| self.combo.is_multiple_of(n))
-            {
-                self.heals += 1;
-            }
-            if c == ' ' {
-                self.word_missed = false;
+            if c == ' ' && self.typed.len() >= self.frontier {
+                self.words += 1;
+                self.fuel = (self.fuel + REFILL).min(FUEL);
             }
             self.score += 10 * self.multiplier() as u64 * (1 + self.rank as u64);
-        } else if self.knobs.forgive_first_miss && !self.word_missed {
-            self.word_missed = true;
-            self.errors += 1;
-            self.last_error = Some(now);
         } else {
-            self.word_missed = true;
             if self.combo >= 20 {
                 self.broke = Some((self.combo, now));
             }
-            self.heat *= self.knobs.miss_keep;
+            self.heat *= MISS_KEEP;
             self.errors += 1;
             self.combo = 0;
             self.last_error = Some(now);
@@ -238,8 +215,16 @@ impl Test {
         self.last_key = Some(now);
         self.update_rank(now);
         self.typed.push(c);
-        if matches!(self.mode, Mode::Words(_)) && self.typed.len() == self.target.len() {
-            self.finish(now);
+        self.frontier = self.frontier.max(self.typed.len());
+        match self.mode {
+            Mode::Words(_) if self.typed.len() == self.target.len() => self.finish(now),
+            Mode::Words(_) => {}
+            // the rest never run out of words: keep a few lines queued
+            _ if self.target.len() - self.typed.len() < 400 => {
+                self.target.push(' ');
+                self.target.extend(random_words(50).join(" ").chars());
+            }
+            _ => {}
         }
     }
 
@@ -255,9 +240,12 @@ impl Test {
             return;
         }
         self.cool(now);
-        if let Mode::Time(s) = self.mode
-            && self.elapsed(now) >= Duration::from_secs(s)
-        {
+        let over = match self.mode {
+            Mode::Time(s) => self.elapsed(now) >= Duration::from_secs(s),
+            Mode::Survival => self.fuel <= 0.0,
+            _ => false,
+        };
+        if over {
             return self.finish(now);
         }
         while self.samples.len() < self.elapsed(now).as_secs() as usize {
@@ -265,9 +253,19 @@ impl Test {
         }
     }
 
-    /// Guitar Hero style: ×1 → ×4 by default, one step per 20 combo.
+    /// Guitar Hero style: ×1 → ×4, one step per 20 combo.
     pub fn multiplier(&self) -> u32 {
-        1 + (self.combo / 20).min(self.knobs.mult_steps)
+        1 + (self.combo / 20).min(MULT_STEPS)
+    }
+
+    /// Maxed-out multiplier.
+    pub fn fever(&self) -> bool {
+        self.combo >= 20 * MULT_STEPS
+    }
+
+    /// Survival level, from 1.
+    pub fn level(&self) -> u32 {
+        1 + self.words / LEVEL_WORDS
     }
 
     fn cool(&mut self, now: Instant) {
@@ -278,7 +276,10 @@ impl Test {
         if self.rank >= HOT {
             self.hot_secs += dt;
         }
-        self.heat *= (-self.knobs.heat_decay * dt).exp();
+        self.heat *= (-HEAT_DECAY * dt).exp();
+        if self.mode == Mode::Survival {
+            self.fuel -= dt * DRAIN_STEP.powi(self.level() as i32 - 1);
+        }
         self.update_rank(now);
     }
 
@@ -306,7 +307,7 @@ impl Test {
         self.jalapenos.push(at);
     }
 
-    fn finish(&mut self, now: Instant) {
+    pub fn finish(&mut self, now: Instant) {
         self.finished = Some(now);
         self.samples.push(self.wpm(now));
     }
@@ -321,7 +322,7 @@ impl Test {
             .saturating_duration_since(start);
         match self.mode {
             Mode::Time(s) => d.min(Duration::from_secs(s)),
-            Mode::Words(_) => d,
+            _ => d,
         }
     }
 
@@ -414,24 +415,23 @@ mod tests {
     }
 
     #[test]
-    fn knobs_forgive_heal_and_cap() {
+    fn survival_refills_streams_and_runs_dry() {
         let t0 = Instant::now();
-        let mut t = Test::new(Mode::Words(3), &["abc", "def", "ghi"]);
-        t.knobs.forgive_first_miss = true;
-        t.knobs.heal_every = Some(4);
-        t.knobs.mult_steps = 0;
-        type_str(&mut t, "abc d", t0);
-        t.type_char('x', t0); // first miss in "def": forgiven
-        assert_eq!((t.combo, t.errors), (5, 1));
+        let mut t = Test::new(Mode::Survival, &["ab"; 3]);
+        type_str(&mut t, "ab ", t0);
+        assert_eq!((t.words, t.fuel), (1, FUEL), "refill caps at full");
         t.backspace();
-        t.type_char('y', t0); // second miss in the same word: counts
-        assert_eq!(t.combo, 0);
-        t.backspace();
-        type_str(&mut t, "ef g", t0);
-        t.type_char('x', t0); // new word, forgiven again
-        assert_eq!(t.combo, 4);
-        assert_eq!(t.heals, 2, "combo 4 twice");
-        assert_eq!(t.multiplier(), 1);
+        t.type_char(' ', t0);
+        assert_eq!(t.words, 1, "retyping a space doesn't count again");
+        assert!(t.target.len() > 100, "more words streamed in");
+        t.tick(t0 + Duration::from_secs(4));
+        let next: String = t.target[3..6].iter().collect();
+        type_str(&mut t, &next, t0 + Duration::from_secs(4));
+        assert!((t.fuel - (FUEL - 4.0 + REFILL)).abs() < 1e-9);
+        t.tick(t0 + Duration::from_secs(11));
+        assert!(t.finished.is_none());
+        t.tick(t0 + Duration::from_secs(12));
+        assert!(t.finished.is_some(), "out of fuel");
     }
 
     #[test]
@@ -458,6 +458,8 @@ mod tests {
         let now = type_steady(&mut fast, 200, 100, t0); // 120wpm
         assert_eq!(RANKS[fast.rank].name, "GHOST PEPPER");
         assert_eq!(fast.multiplier(), 4);
+        assert!(fast.fever());
+        assert_eq!(fast.milestone.map(|(n, _)| n), Some(200));
         // habanero + ghost rank-ups, combo 50/100/150/200
         assert_eq!(fast.jalapenos.len(), 6);
         assert_eq!(slow.jalapenos.len(), 4, "slow gets combo jalapeños only");

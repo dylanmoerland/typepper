@@ -339,6 +339,125 @@ pub fn tumblers(buf: &mut Buffer, t: &Test, now: Instant, panel: Rect, help: Rec
     }
 }
 
+// ── streak ──────────────────────────────────────────────────────────────
+
+const SLAM: f64 = 1.4; // seconds a combo milestone stays up
+const STREAK: u32 = 10; // combo where the caret catches fire
+const SHATTER: f64 = 0.9;
+
+/// Draw unless the cell holds a letter: effects pass behind the typing text.
+fn put_behind(buf: &mut Buffer, x: i32, y: i32, sym: &str, style: Style) {
+    let a = buf.area;
+    if (a.left() as i32..a.right() as i32).contains(&x)
+        && (a.top() as i32..a.bottom() as i32).contains(&y)
+        && !buf[(x as u16, y as u16)]
+            .symbol()
+            .chars()
+            .any(char::is_alphanumeric)
+    {
+        buf[(x as u16, y as u16)].set_symbol(sym).set_style(style);
+    }
+}
+
+/// Every 50 combo the number slams into `sky`: 3× → 2× → 1×, white-hot,
+/// then it cools to the rank color and fades.
+pub fn slam(buf: &mut Buffer, t: &Test, now: Instant, sky: Rect) {
+    let Some((n, at)) = t.milestone else { return };
+    let s = since(Some(at), now).as_secs_f64();
+    if s >= SLAM || sky.height < 5 {
+        return;
+    }
+    let scale = match s {
+        s if s < 0.08 => 3,
+        s if s < 0.16 => 2,
+        _ => 1,
+    };
+    let rgb = RANK_RGB[t.rank];
+    let c = match s {
+        s if s < 0.25 => WHITE,
+        s => mix(rgb, (40, 40, 40), (s - 0.9) / (SLAM - 0.9)),
+    };
+    let rows = crate::ui::big(n);
+    let w = rows[0].chars().count() * scale;
+    let x0 = sky.x as i32 + (sky.width as i32 - w as i32) / 2;
+    let y0 = sky.y as i32 + (sky.height as i32 - 5 * scale as i32) / 2;
+    let style = Style::new().fg(Color::Rgb(c.0, c.1, c.2)).bg(Color::Rgb(c.0, c.1, c.2));
+    for (r, row) in rows.iter().enumerate() {
+        for (col, ch) in row.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            for dy in 0..scale {
+                for dx in 0..scale {
+                    let x = x0 + (col * scale + dx) as i32;
+                    let y = y0 + (r * scale + dy) as i32;
+                    if sky.contains(Position::new(x.max(0) as u16, y.max(0) as u16)) {
+                        put(buf, x, y, "█", style);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// From 10 combo the caret burns: its cell flickers like a coal and a flame
+/// licks up from it, taller every 40 combo.
+pub fn caret_flame(buf: &mut Buffer, t: &Test, now: Instant, caret: (u16, u16)) {
+    if t.combo < STREAK {
+        return;
+    }
+    let tick = (anim_clock(t, now) * 14.0) as u64;
+    let noise = |k: u64| hash(k, tick, 4) as f64 / 255.0;
+    if buf.area.contains(caret.into()) {
+        buf[caret].set_bg(fire(0.6 + 0.4 * noise(9)));
+    }
+    let h = 1 + (t.combo / 40).min(2) as i32;
+    for k in 0..h {
+        let sway = if k == 0 { 0 } else { (noise(k as u64) * 2.99) as i32 - 1 };
+        let v = 1.0 - k as f64 / h as f64 * 0.6 - noise(k as u64 + 5) * 0.2;
+        let sym = ["▲", "^", "'"][k as usize];
+        let (x, y) = (caret.0 as i32 + sway, caret.1 as i32 - 1 - k);
+        let a = buf.area;
+        if !(a.left() as i32..a.right() as i32).contains(&x)
+            || !(a.top() as i32..a.bottom() as i32).contains(&y)
+        {
+            continue;
+        }
+        // empty cell: draw the flame; letters and borders in the way catch the glow
+        let cell = &mut buf[(x as u16, y as u16)];
+        if cell.symbol() == " " {
+            cell.set_symbol(sym);
+        }
+        cell.set_fg(fire(v));
+    }
+}
+
+/// A broken combo's big digits crack apart and tumble off `at` (where the
+/// combo counter sits), passing behind the text.
+pub fn shatter(buf: &mut Buffer, t: &Test, now: Instant, at: Rect) {
+    let Some((n, when)) = t.broke else { return };
+    let s = since(Some(when), now).as_secs_f64();
+    if s >= SHATTER {
+        return;
+    }
+    let k = s / SHATTER;
+    let sym = ["█", "▓", "▒", "░"][((k * 4.0) as usize).min(3)];
+    let style = Style::new().fg(lerp((255, 60, 40), (60, 20, 20), k));
+    for (r, row) in crate::ui::big(n).iter().enumerate() {
+        for (c, ch) in row.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            let seed = (r * 31 + c) as u64;
+            let vx = (hash(seed, 1, n as u64) as f64 / 255.0 - 0.5) * 30.0;
+            let vy = -(hash(seed, 2, n as u64) as f64 / 255.0) * 8.0;
+            let x = at.x as f64 + c as f64 + vx * s;
+            let y = at.y as f64 + r as f64 + vy * s + 30.0 * s * s; // gravity
+            put_behind(buf, x.round() as i32, y.round() as i32, sym, style);
+        }
+    }
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────
 
 /// Seconds since the test started; drives every animation.

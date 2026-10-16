@@ -8,26 +8,13 @@ use ratatui::widgets::{
     Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, Padding, Paragraph,
 };
 
-use crate::cast;
-use crate::engine::{HOT, MODES, Mode, RANKS, Test, scoville};
-use crate::fight::{Arena, Geo};
+use crate::engine::{FUEL, HOT, Mode, RANKS, Test, scoville};
 use crate::fx::{self, RANK_RGB, WHITE, anim_clock, hash, hsv, lerp, rank_color, since};
-use crate::mods::Sauce;
-use crate::pepper;
-use crate::run::{FOES, Fight, Run};
-use crate::toon;
+use crate::{menu, pepper};
 
 const FLASH: Duration = Duration::from_millis(120);
 const SHAKE: Duration = Duration::from_millis(250);
 const CALLOUT: Duration = Duration::from_millis(1200);
-/// Esc can't close a browser tab, so the web title screen doesn't offer it.
-const QUIT: &str = if cfg!(target_arch = "wasm32") {
-    ""
-} else {
-    " · esc quit"
-};
-/// How long the panel reels after a foe lands a hit.
-const OUCH: Duration = Duration::from_millis(400);
 
 const DIGITS: [[&str; 5]; 10] = [
     ["███", "█ █", "█ █", "█ █", "███"],
@@ -42,7 +29,7 @@ const DIGITS: [[&str; 5]; 10] = [
     ["███", "█ █", "███", "  █", "███"],
 ];
 
-fn column(area: Rect) -> Rect {
+pub fn column(area: Rect) -> Rect {
     let [_, col, _] = Layout::horizontal([
         Constraint::Fill(1),
         Constraint::Max(86),
@@ -52,18 +39,15 @@ fn column(area: Rect) -> Rect {
     col
 }
 
-/// Typing screen (practice test or roguelike fight) or practice results.
-/// In fights `arena` holds what you see of the foe across frames.
-pub fn draw(f: &mut Frame, t: &Test, fight: Option<(&Run, &Fight)>, arena: &mut Option<Arena>) {
+/// Typing screen or its results.
+pub fn draw(f: &mut Frame, t: &Test) {
     let now = Instant::now();
     let col = column(f.area());
     if t.finished.is_some() {
         return results(f, col, t, now);
     }
-    // in fights the arena above the panel gets most of the free space
-    let above = if fight.is_some() { 3 } else { 1 };
-    let [_, panel, _, help] = Layout::vertical([
-        Constraint::Fill(above),
+    let [above, panel, _, help] = Layout::vertical([
+        Constraint::Fill(1),
         Constraint::Length(18),
         Constraint::Fill(1),
         Constraint::Length(1),
@@ -71,29 +55,16 @@ pub fn draw(f: &mut Frame, t: &Test, fight: Option<(&Run, &Fight)>, arena: &mut 
     .areas(col);
     fx::speed_lines(f.buffer_mut(), t, now);
     fx::flames(f.buffer_mut(), t, now);
-    let geo = Geo {
-        screen: f.area(),
-        panel,
+    let (text, combo) = typing(f, panel, help, t, now);
+    fx::crowd(f.buffer_mut(), t, now, panel);
+    // milestones slam into the space over the crowd
+    let sky = Rect {
+        height: above.height.saturating_sub(3),
+        ..above
     };
-    let arena = fight.map(|(_, fi)| {
-        let arena = arena.get_or_insert_with(|| Arena::new(fi, &geo));
-        arena.update(now, fi, &geo);
-        arena.draw_back(f.buffer_mut(), fi, now, &geo);
-        (arena, fi)
-    });
-    let (panel, text) = typing(f, panel, help, t, now, fight);
-    match arena {
-        Some((arena, fi)) => {
-            let geo = Geo {
-                screen: f.area(),
-                panel,
-            };
-            arena.deform_panel(f.buffer_mut(), fi, now, panel);
-            arena.draw_front(f.buffer_mut(), fi, now, &geo);
-            arena.draw_text(f.buffer_mut(), &geo, |i| text.pos(i), text.caret);
-        }
-        None => fx::crowd(f.buffer_mut(), t, now, panel),
-    }
+    fx::slam(f.buffer_mut(), t, now, sky);
+    fx::caret_flame(f.buffer_mut(), t, now, text.caret);
+    fx::shatter(f.buffer_mut(), t, now, combo);
     fx::tumblers(f.buffer_mut(), t, now, panel, help);
 }
 
@@ -114,46 +85,16 @@ impl TextGeom {
     }
 }
 
-/// Draws the HUD panel; returns where it ended up (it reels when hit) and
-/// where the text is.
-fn typing(
-    f: &mut Frame,
-    panel: Rect,
-    help: Rect,
-    t: &Test,
-    now: Instant,
-    fight: Option<(&Run, &Fight)>,
-) -> (Rect, TextGeom) {
-    let area = f.area();
+/// Draws the HUD panel; returns where the text and the combo counter are.
+fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (TextGeom, Rect) {
     let clock = anim_clock(t, now);
     let color = rank_color(t.rank);
-    let ouch = fight.is_some_and(|(_, fi)| since(fi.hit_at, now) < OUCH);
-    // a landed hit knocks the whole panel around (if there's room to move)
-    let panel = match ouch {
-        true if panel.x > area.x && panel.right() < area.right() => Rect {
-            x: if ((clock * 30.0) as u64).is_multiple_of(2) {
-                panel.x - 1
-            } else {
-                panel.x + 1
-            },
-            ..panel
-        },
-        _ => panel,
-    };
 
     // flames frame the panel instead of burning through it
     f.render_widget(Clear, panel);
     let panel_block = Block::bordered()
-        .border_type(if ouch {
-            BorderType::Thick
-        } else {
-            BorderType::Rounded
-        })
-        .border_style(if ouch {
-            Style::new().red().bold()
-        } else {
-            Style::new().fg(lerp((0, 0, 0), RANK_RGB[t.rank], fx::PANEL_DIM))
-        })
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(lerp((0, 0, 0), RANK_RGB[t.rank], fx::PANEL_DIM)))
         .padding(Padding::new(2, 2, 1, 1));
     let inner = panel_block.inner(panel);
     f.render_widget(panel_block, panel);
@@ -169,43 +110,21 @@ fn typing(
     ])
     .areas(inner);
 
-    if let Some((run, _)) = fight {
-        let mut spans: Vec<Span> = (0..run.max_hp)
-            .map(|i| {
-                if i < run.hp {
-                    Span::styled("♥ ", if ouch { Color::White } else { Color::Red })
-                } else {
-                    "♡ ".dark_gray()
-                }
-            })
-            .collect();
-        spans.push(format!(" FLOOR {}/{}", run.floor + 1, FOES.len()).dark_gray());
-        if t.started.is_some() {
-            spans.push(format!("  {:.0} wpm", t.wpm(now)).into());
-            spans.push(format!("  {:.0}%", t.accuracy()).dark_gray());
-        }
-        f.render_widget(Line::from(spans), header);
-    } else if t.started.is_none() {
-        let modes: Vec<Span> = MODES
-            .iter()
-            .flat_map(|m| {
-                let s = format!(" {m} ");
-                let span = if *m == t.mode {
-                    s.black().on_yellow().bold()
-                } else {
-                    s.dark_gray()
-                };
-                [span, " ".into()]
-            })
-            .collect();
-        f.render_widget(Line::from(modes), header);
+    if t.started.is_none() {
+        let (r, g, b) = menu::group(t.mode).color;
+        let label = format!(" {} ", menu::label(t.mode));
+        f.render_widget(Line::from(label.black().bg(Color::Rgb(r, g, b)).bold()), header);
     } else {
         let progress = match t.mode {
-            Mode::Time(s) => format!("{}", s.saturating_sub(t.elapsed(now).as_secs())),
-            Mode::Words(n) => format!("{}/{n}", t.typed.iter().filter(|c| **c == ' ').count()),
+            Mode::Time(s) => format!("{}", s.saturating_sub(t.elapsed(now).as_secs())).yellow(),
+            Mode::Words(n) => {
+                format!("{}/{n}", t.typed.iter().filter(|c| **c == ' ').count()).yellow()
+            }
+            Mode::Zen => format!("{} words", t.words).yellow(),
+            Mode::Survival => fuel_gauge(t),
         };
         let stats = Line::from(vec![
-            progress.yellow().bold(),
+            progress.bold(),
             format!("  {:.0} wpm", t.wpm(now)).into(),
             format!("  {:.0}%", t.accuracy()).dark_gray(),
         ]);
@@ -218,21 +137,7 @@ fn typing(
     f.render_widget(score.right_aligned(), header);
 
     // HUD: fighting-game combo counter left, pepper rank right
-    let [combo_area, foe_area, rank_area] = match fight {
-        Some(_) => Layout::horizontal([
-            Constraint::Length(24),
-            Constraint::Fill(1),
-            Constraint::Length(18),
-        ])
-        .areas(hud),
-        None => {
-            let [a, b] = Layout::horizontal([Constraint::Fill(1); 2]).areas(hud);
-            [a, Rect::default(), b]
-        }
-    };
-    if let Some((_, fi)) = fight {
-        f.render_widget(Paragraph::new(foe_lines(fi)), foe_area);
-    }
+    let [combo_area, rank_area] = Layout::horizontal([Constraint::Fill(1); 2]).areas(hud);
     let pop = t.combo > 0
         && t.combo.is_multiple_of(25)
         && since(t.last_key, now) < Duration::from_millis(200);
@@ -247,15 +152,16 @@ fn typing(
         .collect();
     lines[1].push_span("  HITS".dark_gray());
     lines[3].push_span(format!("  ×{}", t.multiplier()).fg(color).bold());
+    if t.fever() {
+        lines[3].push_span(" FEVER".fg(fx::fire(0.6 + 0.4 * (clock * 9.0).sin())).bold());
+    }
     f.render_widget(Paragraph::new(lines), combo_area);
 
     let mut rank_lines = vec![
         Line::from(""),
         Line::from(RANKS[t.rank].name).fg(color).bold(),
     ];
-    if ouch {
-        rank_lines.push(Line::from("OUCH! -1♥").red().bold());
-    } else if let Some((n, at)) = t.broke
+    if let Some((n, at)) = t.broke
         && since(Some(at), now) < CALLOUT
     {
         rank_lines.push(Line::from(format!("COMBO BROKEN ×{n}")).red().bold());
@@ -311,13 +217,7 @@ fn typing(
         .iter()
         .map(|&(start, end)| {
             (start..end)
-                .map(|i| match t.knobs.fog {
-                    // fog curse: only the next few letters show; word shapes stay
-                    Some(n) if i > t.typed.len() + n && t.target[i] != ' ' => {
-                        Span::styled("░", Color::Rgb(45, 45, 55))
-                    }
-                    _ => Span::styled(t.target[i].to_string(), letter(t, i, clock)),
-                })
+                .map(|i| Span::styled(t.target[i].to_string(), letter(t, i, clock)))
                 .collect()
         })
         .collect();
@@ -335,14 +235,21 @@ fn typing(
 
     f.render_widget(heat_bar(t.heat, t.rank, heat.width as usize), heat);
 
-    let hint = match fight {
-        Some(_) => "esc abandon run",
-        None if t.started.is_none() => "←/→ mode · tab restart · esc menu",
-        None => "tab restart · esc menu",
+    let hint = match t.mode {
+        Mode::Zen if t.started.is_some() => "esc finish · tab restart",
+        _ => "tab restart · esc menu",
     };
     // style the span, not the line: a styled Line recolors the flames across the whole row
     f.render_widget(Line::from(hint.dark_gray()).centered(), help);
-    (panel, geom)
+    (geom, combo_area)
+}
+
+/// Survival fuel: a draining gauge, red when nearly dry, plus the level.
+fn fuel_gauge(t: &Test) -> Span<'static> {
+    let k = (t.fuel / FUEL).clamp(0.0, 1.0);
+    let ticks = (k * 10.0).ceil() as usize;
+    let s = format!("LV{} {}{}", t.level(), "▰".repeat(ticks), "▱".repeat(10 - ticks));
+    Span::styled(s, lerp((255, 30, 30), (255, 215, 0), k * 2.0))
 }
 
 /// Heat gauge colored by the rank each segment belongs to, plus a Scoville readout.
@@ -401,6 +308,16 @@ fn letter(t: &Test, i: usize, clock: f64) -> Style {
         None => return Style::new().dark_gray(),
     }
     let age = caret - 1 - i; // 0 = just typed
+    // fever: the trail behind the caret smoulders down to ash (reaper keeps its rainbow)
+    if t.fever() && t.rank < 6 {
+        let noise = hash(i as u64, 1, (clock * 10.0) as u64) as f64 / 255.0;
+        return match age {
+            0..=1 => Style::new().fg(Color::Rgb(255, 244, 192)).bold(),
+            2..=15 => Style::new().fg(fx::fire(1.0 - age as f64 / 16.0 + (noise - 0.5) * 0.25)),
+            _ if noise < 0.04 => Style::new().fg(fx::fire(0.5)),
+            _ => Style::new().fg(Color::Rgb(95, 85, 80)),
+        };
+    }
     let rgb = RANK_RGB[t.rank];
     let bold = |s: Style, on: bool| if on { s.bold() } else { s };
     match t.rank {
@@ -450,7 +367,7 @@ fn wrap(text: &[char], width: usize) -> Vec<(usize, usize)> {
 fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
     let [_, top, _, cards, _, chart, _, details, _, help] = Layout::vertical([
         Constraint::Fill(1),
-        Constraint::Length(14), // mascot + score
+        Constraint::Length(14), // 3D pepper + score
         Constraint::Length(1),
         Constraint::Length(3), // cards
         Constraint::Length(1),
@@ -475,11 +392,13 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
     .areas(info);
     let color = rank_color(t.peak_rank);
 
-    // your peak pepper, celebrating in its own way
+    // your peak pepper in 3D, spinning faster the hotter you got
     let secs = since(t.finished, now).as_secs_f64();
-    toon::draw(f.buffer_mut(), stage, 1.0, |x, y| {
-        cast::mascot(t.peak_rank, secs, x, y)
-    });
+    let pose = pepper::Pose {
+        spin: secs * (0.6 + 0.25 * t.peak_rank as f64),
+        tilt: 0.35 + 0.12 * (secs * 0.7).sin(),
+    };
+    pepper::draw(f.buffer_mut(), stage, &pepper::RANK_SHAPES[t.peak_rank], &pose);
 
     f.render_widget(Line::from("SCORE").dark_gray().centered(), label);
     let digits: Vec<Line> = big(t.score)
@@ -548,9 +467,12 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
         );
     f.render_widget(chart_widget, chart);
 
+    let mode = match t.mode {
+        Mode::Survival => format!("SURVIVAL lv{}", t.level()),
+        m => menu::label(m),
+    };
     let line = format!(
-        "{} · {:.1}s · {} correct · {} wrong · {} slips",
-        t.mode,
+        "{mode} · {:.1}s · {} correct · {} wrong · {} slips",
         secs,
         t.correct(),
         t.typed.len() - t.correct(),
@@ -558,7 +480,7 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
     );
     f.render_widget(Line::from(line).dark_gray().centered(), details);
     f.render_widget(
-        Line::from("tab/enter again · ←/→ mode · esc menu")
+        Line::from("tab/enter again · esc menu")
             .dark_gray()
             .centered(),
         help,
@@ -566,7 +488,7 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
 }
 
 /// 5-row block glyphs: digits plus the letters of the logo.
-fn glyph(c: char) -> Option<[&'static str; 5]> {
+pub fn glyph(c: char) -> Option<[&'static str; 5]> {
     Some(match c {
         '0'..='9' => DIGITS[c as usize - '0' as usize],
         'T' => ["███", " █ ", " █ ", " █ ", " █ "],
@@ -581,7 +503,7 @@ fn glyph(c: char) -> Option<[&'static str; 5]> {
 /// One row of a block glyph as cells. Full blocks also paint their
 /// background: fonts rarely fill the whole cell with `█`, which leaves seams
 /// between stacked rows (very visible on the web grid).
-fn solid(row: &str, color: Color) -> Vec<Span<'static>> {
+pub fn solid(row: &str, color: Color) -> Vec<Span<'static>> {
     row.chars()
         .map(|c| match c {
             '█' => Span::styled("█", Style::new().fg(color).bg(color)),
@@ -591,7 +513,7 @@ fn solid(row: &str, color: Color) -> Vec<Span<'static>> {
 }
 
 /// A number in 5-row block digits.
-fn big(n: impl ToString) -> Vec<String> {
+pub fn big(n: impl ToString) -> Vec<String> {
     let s = n.to_string();
     (0..5)
         .map(|row| {
@@ -599,247 +521,6 @@ fn big(n: impl ToString) -> Vec<String> {
             parts.join(" ")
         })
         .collect()
-}
-
-/// Foe name, health and attack timer for the fight HUD (the foe itself is
-/// out in the arena).
-fn foe_lines(fi: &Fight) -> Vec<Line<'static>> {
-    let foe = fi.foe;
-    let (r, g, b) = foe.color;
-    let dead = fi.foe_hp() == 0;
-    let name_style = if dead {
-        Style::new().dark_gray()
-    } else {
-        Style::new().fg(Color::Rgb(r, g, b)).bold()
-    };
-    let hp_w = 20;
-    let filled = (fi.foe_hp() as f64 / foe.hp as f64 * hp_w as f64).ceil() as usize;
-    let charge = fi.charge.clamp(0.0, 1.0);
-    let ticks = (charge * 10.0) as usize;
-    let atk = lerp((255, 215, 0), (255, 30, 30), charge);
-    vec![
-        Line::from(Span::styled(
-            if dead { "DEFEATED" } else { foe.name },
-            name_style,
-        )),
-        Line::from(vec![
-            Span::styled("█".repeat(filled), Color::Rgb(r, g, b)),
-            "░".repeat(hp_w - filled).dark_gray(),
-            format!(" {}", fi.foe_hp()).dark_gray(),
-        ]),
-        Line::from(vec![
-            "ATK ".dark_gray(),
-            Span::styled("▰".repeat(ticks), atk),
-            "▱".repeat(10 - ticks).dark_gray(),
-        ]),
-        Line::from(foe.curse.name().dark_gray().italic()),
-        if dead {
-            Line::from("K.O.!!").magenta().bold()
-        } else {
-            Line::default()
-        },
-    ]
-}
-
-/// Title: animated logo, Practice / Run.
-pub fn title(f: &mut Frame, pick: usize, secs: f64) {
-    let col = column(f.area());
-    let [_, stage, _, logo, _, tag, _, menu, _, about, _, help] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Fill(1), // the pepper takes whatever height is left
-        Constraint::Length(1),
-        Constraint::Length(5),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(2),
-        Constraint::Length(1),
-    ])
-    .areas(col);
-    // spin, sway, and morph up the heat ladder: 4s per pepper, the last 1s morphing
-    let shapes = &pepper::RANK_SHAPES;
-    let i = (secs / 4.0) as usize;
-    let k = 0.5 - 0.5 * (((secs % 4.0) - 3.0).clamp(0.0, 1.0) * std::f64::consts::PI).cos();
-    let shape = shapes[i % shapes.len()].lerp(&shapes[(i + 1) % shapes.len()], k);
-    let pose = pepper::Pose {
-        spin: secs * 1.1,
-        tilt: 0.35 + 0.12 * (secs * 0.7).sin(),
-    };
-    pepper::draw(f.buffer_mut(), stage, &shape, &pose);
-    // heat ripples through the letters, bell pepper → reaper
-    let rows: Vec<Line> = (0..5)
-        .map(|row| {
-            "TYPEPPER"
-                .chars()
-                .enumerate()
-                .flat_map(|(i, c)| {
-                    let k = (secs * 2.0 - i as f64 * 0.4).sin() * 0.5 + 0.5;
-                    let rank = 2 + (k * 4.99) as usize;
-                    let mut cells = solid(glyph(c).unwrap()[row], rank_color(rank));
-                    cells.push(" ".into());
-                    cells
-                })
-                .collect()
-        })
-        .collect();
-    f.render_widget(Paragraph::new(rows).centered(), logo);
-    f.render_widget(
-        Line::from("a spicy little typing game".dark_gray()).centered(),
-        tag,
-    );
-    let item = |label: &str, on: bool| {
-        let s = format!("  {label}  ");
-        if on {
-            s.black().on_yellow().bold()
-        } else {
-            s.dark_gray()
-        }
-    };
-    let items = Line::from(vec![
-        item("PRACTICE", pick == 0),
-        "    ".into(),
-        item("RUN", pick == 1),
-    ]);
-    f.render_widget(items.centered(), menu);
-    let blurb = if pick == 0 {
-        "timed tests from 15s to 50 words · chase your heat"
-    } else {
-        "6 cursed floors · collect sauces · face THE REAPER"
-    };
-    f.render_widget(Line::from(blurb.gray()).centered(), about);
-    let theme = if crate::theme::is_light() {
-        "light"
-    } else {
-        "dark"
-    };
-    let hint = format!("←/→ choose · enter start · t theme: {theme}{QUIT}");
-    f.render_widget(Line::from(hint.dark_gray()).centered(), help);
-}
-
-fn hearts(run: &Run) -> Line<'static> {
-    let mut spans: Vec<Span> = (0..run.max_hp)
-        .map(|i| {
-            if i < run.hp {
-                "♥ ".red()
-            } else {
-                "♡ ".dark_gray()
-            }
-        })
-        .collect();
-    spans.push(format!("  SCORE {}", run.score).dark_gray());
-    Line::from(spans)
-}
-
-fn sauce_list(run: &Run) -> Line<'static> {
-    let mut spans = vec!["sauces: ".dark_gray()];
-    if run.sauces.is_empty() {
-        spans.push("none yet".dark_gray());
-    }
-    for (i, s) in run.sauces.iter().enumerate() {
-        if i > 0 {
-            spans.push(" · ".dark_gray());
-        }
-        spans.push(Span::styled(s.name(), s.color()));
-    }
-    Line::from(spans)
-}
-
-/// Floor cleared: pick one of three sauces.
-pub fn reward(f: &mut Frame, run: &Run, offers: &[Sauce], pick: usize) {
-    let col = column(f.area());
-    let [_, title, life, _, cards, _, owned, _, help] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(7),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-        Constraint::Length(1),
-    ])
-    .areas(col);
-    let foe = &FOES[run.floor];
-    let (r, g, b) = foe.color;
-    let head = Line::from(vec![
-        Span::styled(foe.name, Color::Rgb(r, g, b)).bold(),
-        " DEFEATED · ".bold(),
-        "pick a sauce".yellow().bold(),
-    ]);
-    f.render_widget(head.centered(), title);
-    f.render_widget(hearts(run).centered(), life);
-    let areas: Vec<Rect> = Layout::horizontal(vec![Constraint::Fill(1); offers.len()])
-        .spacing(2)
-        .split(cards)
-        .to_vec();
-    for (i, (sauce, area)) in offers.iter().zip(areas).enumerate() {
-        let on = i == pick;
-        let block = Block::bordered()
-            .border_type(if on {
-                BorderType::Thick
-            } else {
-                BorderType::Rounded
-            })
-            .border_style(if on {
-                Style::new().fg(sauce.color())
-            } else {
-                Style::new().dark_gray()
-            })
-            .title(format!(" {} ", i + 1))
-            .padding(Padding::horizontal(1));
-        let body = vec![
-            Line::from(Span::styled(sauce.name(), sauce.color()).bold()),
-            Line::default(),
-            Line::from(sauce.blurb()),
-        ];
-        let p = Paragraph::new(body)
-            .wrap(ratatui::widgets::Wrap { trim: true })
-            .block(block);
-        f.render_widget(if on { p } else { p.dark_gray() }, area);
-    }
-    f.render_widget(sauce_list(run).centered(), owned);
-    f.render_widget(
-        Line::from("←/→ choose · enter take · 1-3 quick pick · esc abandon".dark_gray()).centered(),
-        help,
-    );
-}
-
-/// Run over: cooked, or the reaper falls.
-pub fn over(f: &mut Frame, run: &Run, won: bool) {
-    let col = column(f.area());
-    let [_, title, _, stats, owned, _, help] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-        Constraint::Length(1),
-    ])
-    .areas(col);
-    let head = if won {
-        "T H E   R E A P E R   H A S   F A L L E N"
-            .fg(rank_color(6))
-            .bold()
-    } else {
-        "C O O K E D".red().bold()
-    };
-    f.render_widget(Line::from(head).centered(), title);
-    let line = format!(
-        "floor {}/{} · score {}",
-        run.floor + 1,
-        FOES.len(),
-        run.score
-    );
-    f.render_widget(Line::from(line.gray()).centered(), stats);
-    f.render_widget(sauce_list(run).centered(), owned);
-    f.render_widget(
-        Line::from("enter/tab new run · esc menu".dark_gray()).centered(),
-        help,
-    );
 }
 
 #[cfg(test)]
