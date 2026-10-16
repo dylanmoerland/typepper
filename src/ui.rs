@@ -8,6 +8,7 @@ use ratatui::widgets::{
     Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, Padding, Paragraph,
 };
 
+use crate::best::{self, Outcome};
 use crate::engine::{FUEL, HOT, Mode, RANKS, Test, scoville};
 use crate::fx::{self, RANK_RGB, WHITE, anim_clock, hash, hsv, lerp, rank_color, since};
 use crate::{menu, pepper};
@@ -40,11 +41,11 @@ pub fn column(area: Rect) -> Rect {
 }
 
 /// Typing screen or its results.
-pub fn draw(f: &mut Frame, t: &Test) {
+pub fn draw(f: &mut Frame, t: &Test, outcome: Option<Outcome>) {
     let now = Instant::now();
     let col = column(f.area());
     if t.finished.is_some() {
-        return results(f, col, t, now);
+        return results(f, col, t, outcome, now);
     }
     let [above, panel, _, help] = Layout::vertical([
         Constraint::Fill(1),
@@ -113,7 +114,10 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
     if t.started.is_none() {
         let (r, g, b) = menu::group(t.mode).color;
         let label = format!(" {} ", menu::label(t.mode));
-        f.render_widget(Line::from(label.black().bg(Color::Rgb(r, g, b)).bold()), header);
+        f.render_widget(
+            Line::from(label.black().bg(Color::Rgb(r, g, b)).bold()),
+            header,
+        );
     } else {
         let progress = match t.mode {
             Mode::Time(s) => format!("{}", s.saturating_sub(t.elapsed(now).as_secs())).yellow(),
@@ -153,7 +157,11 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
     lines[1].push_span("  HITS".dark_gray());
     lines[3].push_span(format!("  ×{}", t.multiplier()).fg(color).bold());
     if t.fever() {
-        lines[3].push_span(" FEVER".fg(fx::fire(0.6 + 0.4 * (clock * 9.0).sin())).bold());
+        lines[3].push_span(
+            " FEVER"
+                .fg(fx::fire(0.6 + 0.4 * (clock * 9.0).sin()))
+                .bold(),
+        );
     }
     f.render_widget(Paragraph::new(lines), combo_area);
 
@@ -248,7 +256,12 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
 fn fuel_gauge(t: &Test) -> Span<'static> {
     let k = (t.fuel / FUEL).clamp(0.0, 1.0);
     let ticks = (k * 10.0).ceil() as usize;
-    let s = format!("LV{} {}{}", t.level(), "▰".repeat(ticks), "▱".repeat(10 - ticks));
+    let s = format!(
+        "LV{} {}{}",
+        t.level(),
+        "▰".repeat(ticks),
+        "▱".repeat(10 - ticks)
+    );
     Span::styled(s, lerp((255, 30, 30), (255, 215, 0), k * 2.0))
 }
 
@@ -364,7 +377,7 @@ fn wrap(text: &[char], width: usize) -> Vec<(usize, usize)> {
     lines
 }
 
-fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
+fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: Instant) {
     let [_, top, _, cards, _, chart, _, details, _, help] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(14), // 3D pepper + score
@@ -380,13 +393,14 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
     .areas(area);
     let [stage, info] =
         Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)]).areas(top);
-    let [_, label, _, score, _, peak, _] = Layout::vertical([
+    let [_, label, _, score, _, peak, best_row, _] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(1), // SCORE
         Constraint::Length(1),
         Constraint::Length(5), // digits
         Constraint::Length(1),
         Constraint::Length(1), // peak
+        Constraint::Length(1), // personal best
         Constraint::Fill(1),
     ])
     .areas(info);
@@ -398,7 +412,12 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
         spin: secs * (0.6 + 0.25 * t.peak_rank as f64),
         tilt: 0.35 + 0.12 * (secs * 0.7).sin(),
     };
-    pepper::draw(f.buffer_mut(), stage, &pepper::RANK_SHAPES[t.peak_rank], &pose);
+    pepper::draw(
+        f.buffer_mut(),
+        stage,
+        &pepper::RANK_SHAPES[t.peak_rank],
+        &pose,
+    );
 
     f.render_widget(Line::from("SCORE").dark_gray().centered(), label);
     let digits: Vec<Line> = big(t.score)
@@ -417,6 +436,24 @@ fn results(f: &mut Frame, area: Rect, t: &Test, now: Instant) {
         .dark_gray(),
     ]);
     f.render_widget(peak_line.centered(), peak);
+    if let Some(o) = outcome {
+        let best_line = if o.is_new() {
+            // a new best shimmers through the heat colors
+            let c = hsv(20.0 + 40.0 * (secs * 4.0).sin(), 1.0, 1.0);
+            let mut spans = vec![
+                format!("★ NEW BEST {}", best::show(t.mode, o.value))
+                    .fg(c)
+                    .bold(),
+            ];
+            if let Some(w) = o.was {
+                spans.push(format!("  was {}", best::show(t.mode, w)).dark_gray());
+            }
+            Line::from(spans)
+        } else {
+            Line::from(format!("best {}", best::show(t.mode, o.was.unwrap_or(o.value))).dark_gray())
+        };
+        f.render_widget(best_line.centered(), best_row);
+    }
 
     let card_areas: [Rect; 4] = Layout::horizontal([Constraint::Fill(1); 4])
         .spacing(1)

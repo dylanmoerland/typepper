@@ -11,6 +11,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Widget};
 use web_time::Instant;
 
+use crate::best::{self, Bests};
 use crate::engine::Mode;
 use crate::fx::{Rgb, WHITE, fire, hash, lerp, mix, rank_color};
 use crate::{pepper, theme, ui};
@@ -161,7 +162,7 @@ fn ease_out_back(k: f64) -> f64 {
     1.0 + (c1 + 1.0) * k.powi(3) + c1 * k * k
 }
 
-pub fn draw(f: &mut Frame, m: &Menu, now: Instant) {
+pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
     let area = f.area();
     let col = ui::column(area);
     // logo a bit above the middle, the 3D pepper gets everything above it;
@@ -220,7 +221,10 @@ pub fn draw(f: &mut Frame, m: &Menu, now: Instant) {
                 .enumerate()
                 .flat_map(|(i, c)| {
                     let k = (secs * 2.0 - i as f64 * 0.4).sin() * 0.5 + 0.5;
-                    let mut cells = ui::solid(ui::glyph(c).unwrap()[row], rank_color(2 + (k * 4.99) as usize));
+                    let mut cells = ui::solid(
+                        ui::glyph(c).unwrap()[row],
+                        rank_color(2 + (k * 4.99) as usize),
+                    );
                     cells.push(" ".into());
                     cells
                 })
@@ -234,7 +238,7 @@ pub fn draw(f: &mut Frame, m: &Menu, now: Instant) {
         .centered()
         .render(tag, f.buffer_mut());
 
-    carousel(f.buffer_mut(), cards, m, now, secs);
+    carousel(f.buffer_mut(), cards, m, bests, now, secs);
 
     let dots: Vec<Span> = (0..MENU.len())
         .flat_map(|i| {
@@ -249,7 +253,9 @@ pub fn draw(f: &mut Frame, m: &Menu, now: Instant) {
     Line::from(dots).centered().render(dot_row, f.buffer_mut());
     let theme = if theme::is_light() { "light" } else { "dark" };
     let hint = format!("←/→ mode · ↑/↓ length · enter play · t theme: {theme}{QUIT}");
-    Line::from(hint.dark_gray()).centered().render(help, f.buffer_mut());
+    Line::from(hint.dark_gray())
+        .centered()
+        .render(help, f.buffer_mut());
 }
 
 /// Cards side by side, the selected one centered, neighbors peeking in dimmed.
@@ -261,7 +267,7 @@ const SIDE: f64 = 0.7;
 /// The middle card's border glints white as it lands, then cools to its color.
 const GLINT: f64 = 0.35;
 
-fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, now: Instant, secs: f64) {
+fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant, secs: f64) {
     let s = m.scroll(now);
     let before = now.checked_sub(Duration::from_millis(10)).unwrap_or(now);
     let v = (s - m.scroll(before)) / 0.01; // cards per second
@@ -283,7 +289,9 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, now: Instant, secs: f64) {
             continue;
         }
         let mut card = Buffer::empty(Rect::new(0, 0, w, h));
-        draw_card(&mut card, g, i == m.sel(), m.len[i], m.age(now), secs);
+        let mode = g.modes[m.len[i]];
+        let best = bests.get(mode).map(|v| best::show(mode, v));
+        draw_card(&mut card, g, i == m.sel(), m.len[i], best, m.age(now), secs);
         // sharp inside the middle slot, defocusing toward the screen edges
         blit(buf, &card, x, area.y + (area.height - h) / 2, |sx| {
             let off = (sx as f64 + 0.5 - mid).abs() - big / 2.0 - 1.0;
@@ -319,7 +327,15 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, now: Instant, secs: f64) {
     }
 }
 
-fn draw_card(card: &mut Buffer, g: &Group, sel: bool, chosen: usize, age: f64, secs: f64) {
+fn draw_card(
+    card: &mut Buffer,
+    g: &Group,
+    sel: bool,
+    chosen: usize,
+    best: Option<String>,
+    age: f64,
+    secs: f64,
+) {
     let area = card.area;
     let (r, gr, b) = g.color;
     let color = Color::Rgb(r, gr, b);
@@ -336,14 +352,14 @@ fn draw_card(card: &mut Buffer, g: &Group, sel: bool, chosen: usize, age: f64, s
     let inner = block.inner(area);
     block.render(area, card);
     // padding gives way first on the smaller side cards
-    let [_, title, _, blurb, _, len, _] = Layout::vertical([
+    let [_, title, _, blurb, _, len, best_row] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(1),
         Constraint::Fill(1),
         Constraint::Length(1),
         Constraint::Fill(1),
         Constraint::Length(1),
-        Constraint::Fill(1),
+        Constraint::Length(1),
     ])
     .areas(inner);
 
@@ -367,7 +383,11 @@ fn draw_card(card: &mut Buffer, g: &Group, sel: bool, chosen: usize, age: f64, s
         .collect();
     Line::from(spaced).centered().render(title, card);
 
-    let k = if sel { ((age - WAIT_TITLE) / TYPE).clamp(0.0, 1.0) } else { 1.0 };
+    let k = if sel {
+        ((age - WAIT_TITLE) / TYPE).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
     let n = (g.blurb.chars().count() as f64 * k) as usize;
     let mut typed: String = g.blurb.chars().take(n).collect();
     if k < 1.0 {
@@ -394,6 +414,11 @@ fn draw_card(card: &mut Buffer, g: &Group, sel: bool, chosen: usize, age: f64, s
             .collect(),
     };
     opts.centered().render(len, card);
+    if let Some(b) = best {
+        Line::from(format!("best {b}").dark_gray())
+            .centered()
+            .render(best_row, card);
+    }
 }
 
 /// Copy `card` onto `buf` with its left edge at `x` (may be off-screen),
@@ -468,9 +493,11 @@ fn dab(buf: &mut Buffer, x: i32, y: i32, sym: &str, color: Rgb, k: f64) {
     if (a.left() as i32..a.right() as i32).contains(&x)
         && (a.top() as i32..a.bottom() as i32).contains(&y)
     {
-        buf[(x as u16, y as u16)]
-            .set_symbol(sym)
-            .set_fg(lerp(page_rgb(), color, k.clamp(0.0, 1.0)));
+        buf[(x as u16, y as u16)].set_symbol(sym).set_fg(lerp(
+            page_rgb(),
+            color,
+            k.clamp(0.0, 1.0),
+        ));
     }
 }
 
@@ -494,7 +521,14 @@ fn sprint(buf: &mut Buffer, area: Rect, _focus: Rect, secs: f64, w: f64) {
             let fade = 1.0 - j as f64 / len as f64; // bright head, dim tail
             let sym = if j == 0 { "━" } else { "─" };
             let c = mix((110, 215, 80), WHITE, 0.3 * fade);
-            dab(buf, area.x as i32 + head as i32 + j, y as i32, sym, c, 0.75 * fade * w);
+            dab(
+                buf,
+                area.x as i32 + head as i32 + j,
+                y as i32,
+                sym,
+                c,
+                0.75 * fade * w,
+            );
         }
     }
 }
@@ -506,14 +540,21 @@ fn blitz(buf: &mut Buffer, _area: Rect, focus: Rect, secs: f64, w: f64) {
         focus.x as f64 + focus.width as f64 / 2.0,
         focus.y as f64 + focus.height as f64 / 2.0,
     );
-    let (rx, ry) = (focus.width as f64 / 2.0 + 8.0, focus.height as f64 / 2.0 + 4.0);
+    let (rx, ry) = (
+        focus.width as f64 / 2.0 + 8.0,
+        focus.height as f64 / 2.0 + 4.0,
+    );
     let gold = (255, 215, 0);
     let hand = secs.floor() as i64;
     for t in 0..12i64 {
         let a = t as f64 / 12.0 * std::f64::consts::TAU - std::f64::consts::FRAC_PI_2;
         let (x, y) = (cx + rx * a.cos(), cy + ry * a.sin());
         let ago = (hand - t).rem_euclid(12) as f64; // 0 = the hand is here
-        let k = if ago == 0.0 { 1.0 } else { 0.25 + 0.45 * (1.0 - ago / 4.0).max(0.0) };
+        let k = if ago == 0.0 {
+            1.0
+        } else {
+            0.25 + 0.45 * (1.0 - ago / 4.0).max(0.0)
+        };
         let sym = if ago == 0.0 { "◆" } else { "◇" };
         dab(buf, x.round() as i32, y.round() as i32, sym, gold, k * w);
     }
@@ -526,7 +567,14 @@ fn blitz(buf: &mut Buffer, _area: Rect, focus: Rect, secs: f64, w: f64) {
         if focus.contains(Position::new(x.max(0.0) as u16, y.max(0.0) as u16)) {
             continue;
         }
-        dab(buf, x.round() as i32, y.round() as i32, "·", gold, (1.0 - p) * 0.6 * w);
+        dab(
+            buf,
+            x.round() as i32,
+            y.round() as i32,
+            "·",
+            gold,
+            (1.0 - p) * 0.6 * w,
+        );
     }
 }
 
@@ -543,7 +591,14 @@ fn zen(buf: &mut Buffer, area: Rect, _focus: Rect, secs: f64, w: f64) {
         let glow = 0.5 + 0.5 * (secs * 1.8 + seed).sin();
         let sym = if glow > 0.7 { "•" } else { "·" };
         let y = area.bottom() as f64 - 1.0 - up;
-        dab(buf, area.x as i32 + x as i32, y as i32, sym, (60, 200, 190), (0.25 + 0.75 * glow) * w);
+        dab(
+            buf,
+            area.x as i32 + x as i32,
+            y as i32,
+            sym,
+            (60, 200, 190),
+            (0.25 + 0.75 * glow) * w,
+        );
     }
 }
 
@@ -603,7 +658,10 @@ mod tests {
         assert_eq!(m.mode(), Mode::Survival, "single-length modes stay put");
         let done = t0 + Duration::from_secs(1);
         assert_eq!(m.scroll(done), -1.0);
-        assert!(m.scroll(t0 + Duration::from_millis(200)) < -1.0, "overshoots");
+        assert!(
+            m.scroll(t0 + Duration::from_millis(200)) < -1.0,
+            "overshoots"
+        );
         m.swipe(1, done);
         m.length(-1);
         assert_eq!(m.mode(), Mode::Words(10), "back on sprint, shortest");

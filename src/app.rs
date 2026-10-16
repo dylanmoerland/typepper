@@ -9,6 +9,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use web_time::Instant;
 
+use crate::best::{Bests, Outcome};
 use crate::engine::{Mode, Test, random_words};
 use crate::menu::{self, Menu};
 use crate::ui;
@@ -35,6 +36,10 @@ pub struct App {
     screen: Screen,
     /// Kept across tests so esc lands back on the mode you played.
     menu: Menu,
+    bests: Bests,
+    /// The finished test's result against your best (once it's been scored).
+    outcome: Option<Outcome>,
+    scored: bool,
     since: Instant,
     bot: Option<Bot>,
 }
@@ -45,6 +50,9 @@ impl App {
         App {
             screen: Screen::Title,
             menu: Menu::new(now),
+            bests: Bests::load(),
+            outcome: None,
+            scored: false,
             since: now,
             bot: demo.then(Bot::new),
         }
@@ -116,6 +124,14 @@ impl App {
                     }
                 }
                 test.tick(now);
+                // demo runs don't count
+                if let Some(end) = test.finished
+                    && !self.scored
+                    && self.bot.is_none()
+                {
+                    self.scored = true;
+                    self.outcome = self.bests.record(test, end);
+                }
             }
         }
         if let Some(s) = next {
@@ -126,8 +142,8 @@ impl App {
     pub fn draw(&self, f: &mut Frame) {
         let now = Instant::now();
         match &self.screen {
-            Screen::Title => menu::draw(f, &self.menu, now),
-            Screen::Practice(test) => ui::draw(f, test),
+            Screen::Title => menu::draw(f, &self.menu, &self.bests, now),
+            Screen::Practice(test) => ui::draw(f, test, self.outcome),
         }
         if self.bot.is_some() {
             f.render_widget(Line::from(" DEMO ").black().on_magenta().bold(), f.area());
@@ -138,6 +154,7 @@ impl App {
     fn go(&mut self, screen: Screen, now: Instant) {
         self.screen = screen;
         self.since = now;
+        (self.outcome, self.scored) = (None, false);
     }
 }
 
