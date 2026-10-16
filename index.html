@@ -3,11 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>typepper</title>
-  <meta name="description" content="A spicy little typing game: climb the Scoville scale in sprint, blitz, zen and survival. Play in your browser or your terminal.">
+  <title>typepper — a spicy little typing game &amp; typing test</title>
+  <meta name="description" content="A spicy little typing game and typing test: climb the Scoville scale as your WPM heats up, in sprint, blitz, zen and survival modes. Free, in your browser or your terminal.">
+  <link rel="canonical" href="https://typepper.com/">
+  <!-- link previews (Discord, Slack, X, iMessage…) -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="typepper">
+  <meta property="og:title" content="typepper — a spicy little typing game">
+  <meta property="og:description" content="Climb the Scoville scale as your WPM heats up. Sprint, blitz, zen and survival — in your browser or your terminal.">
+  <meta property="og:url" content="https://typepper.com/">
+  <meta property="og:image" content="https://typepper.com/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="typepper: a pixel chili, the TYPEPPER wordmark, and the heat ranks">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="theme-color" content="#000000">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "VideoGame",
+    "name": "typepper",
+    "url": "https://typepper.com/",
+    "image": "https://typepper.com/og.png",
+    "description": "A spicy little typing game and typing test for your terminal and browser, with sprint, blitz, zen and survival modes.",
+    "genre": ["Typing game", "Educational game"],
+    "gamePlatform": ["Web browser", "macOS", "Linux", "Windows"],
+    "applicationCategory": "GameApplication",
+    "operatingSystem": "Any",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "author": { "@type": "Person", "name": "Leo Diegues" },
+    "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+    "sameAs": ["https://github.com/leodiegues/typepper"]
+  }
+  </script>
   <link data-trunk rel="copy-dir" href="assets/fonts">
   <link data-trunk rel="copy-file" href="install.sh">
   <link data-trunk rel="icon" href="assets/logo/favicon.ico">
+  <link data-trunk rel="copy-file" href="assets/logo/og.png">
+  <link data-trunk rel="copy-file" href="web/robots.txt">
+  <link data-trunk rel="copy-file" href="web/sitemap.xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- the other font choices in settings; display=block so the game never bakes in a fallback -->
@@ -25,6 +59,11 @@
     body { display: flex; flex-direction: column; }
     #game { flex: 1; min-height: 0; }
     #game canvas:focus { outline: none; }
+    /* read by search engines and screen readers; the game itself is a canvas */
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; overflow: hidden;
+      clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+    }
     footer {
       flex: none;
       display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
@@ -62,6 +101,17 @@
   <link data-trunk rel="rust" data-wasm-opt="z">
 </head>
 <body>
+  <header class="sr-only">
+    <h1>typepper — a spicy little typing game</h1>
+    <p>A typing game and typing test where your speed is heat: type fast and clean to climb the
+      Scoville scale from bell pepper to Carolina reaper, with combos, streaks and fever.
+      Modes: sprint (10, 25 or 50 words), blitz (15, 30 or 60 seconds), zen (endless, no clock)
+      and survival (a fuel clock that drains faster every level). Personal bests are saved.</p>
+    <p>Play it here in your browser, or install it in your terminal on macOS, Linux and Windows.
+      Free and open source under the GPL.</p>
+  </header>
+  <noscript><p>typepper needs JavaScript (and WebAssembly) to run in the browser. You can also
+    install it in your terminal: curl -LsSf https://typepper.com/install.sh | sh</p></noscript>
   <main id="game"></main>
   <footer>
     <span>play it in your terminal</span>
