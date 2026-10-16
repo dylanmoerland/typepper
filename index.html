@@ -6,6 +6,8 @@
   <title>typepper</title>
   <meta name="description" content="A spicy little typing game: climb the Scoville scale in sprint, blitz, zen and survival. Play in your browser or your terminal.">
   <link data-trunk rel="copy-dir" href="assets/fonts">
+  <link data-trunk rel="copy-file" href="install.sh">
+  <link data-trunk rel="icon" href="assets/logo/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- the other font choices in settings; display=block so the game never bakes in a fallback -->
@@ -64,8 +66,7 @@
   <footer>
     <span>play it in your terminal</span>
     <span class="cmd">
-      <!-- ponytail: final once the release pipeline publishes the installer here -->
-      <code id="install">curl -LsSf https://leodiegues.github.io/typepper/install.sh | sh</code>
+      <code id="install">curl -LsSf https://typepper.com/install.sh | sh</code>
       <button id="copy" type="button" aria-label="Copy the install command">copy</button>
     </span>
     <a href="https://github.com/sponsors/leodiegues" target="_blank" rel="noopener"><span class="heart">♥</span> sponsor</a>

@@ -2,6 +2,10 @@
 name = "typepper"
 version = "0.1.0"
 edition = "2024"
+description = "A spicy little typing game for your terminal and browser"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/leodiegues/typepper"
+homepage = "https://typepper.com/"
 
 [dependencies]
 rand = "0.10.3"
@@ -17,3 +21,8 @@ ratzilla = "0.3.1"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["CssStyleDeclaration", "Element", "FontFaceSet", "MediaQueryList", "Storage"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
