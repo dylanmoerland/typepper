@@ -8,8 +8,8 @@ use rand::RngExt;
 use rand::seq::SliceRandom;
 use web_time::Instant;
 
-use crate::cast::Look;
 use crate::engine::{Knobs, Mode, Test, random_words};
+use crate::foes::Kind;
 use crate::mods::{Curse, SAUCES, Sauce};
 
 pub struct Foe {
@@ -18,30 +18,9 @@ pub struct Foe {
     /// Seconds between attacks.
     pub attack: f64,
     pub curse: Curse,
-    /// Small text face for terminals too short for the portrait.
-    pub face: [&'static str; 3],
-    pub look: Look,
-}
-
-impl Foe {
-    pub fn color(&self) -> (u8, u8, u8) {
-        let [r, g, b] = self.look.base;
-        (r as u8, g as u8, b as u8)
-    }
-}
-
-const fn look(base: [f64; 3], outline: [f64; 3], rx: f64, ry: f64) -> Look {
-    Look {
-        base,
-        outline,
-        rx,
-        ry,
-        lobes: 0.0,
-        lobe_depth: 0.0,
-        bumps: 0.0,
-        wrinkles: false,
-        hood: false,
-    }
+    pub kind: Kind,
+    /// HUD color (health bar, name).
+    pub color: (u8, u8, u8),
 }
 
 // The run climbs the Scoville scale, ending at the hottest pepper there is.
@@ -52,66 +31,48 @@ pub const FOES: [Foe; 6] = [
         hp: 3_000,
         attack: 12.0,
         curse: Curse::Caps,
-        face: [" ▲ ▲ ", "(ÒдÓ)", " ╯ ╰ "],
-        look: look([215.0, 38.0, 28.0], [90.0, 10.0, 8.0], 104.0, 124.0),
+        kind: Kind::Cayenne,
+        color: (215, 38, 28),
     },
     Foe {
         name: "NUMBER NAGA",
         hp: 4_500,
         attack: 11.0,
         curse: Curse::Numbers,
-        face: [" #_# ", "(°□°)", " ╯ ╰ "],
-        look: Look {
-            bumps: 0.07,
-            ..look([235.0, 85.0, 25.0], [100.0, 30.0, 5.0], 100.0, 118.0)
-        },
+        kind: Kind::Naga,
+        color: (235, 85, 25),
     },
     Foe {
         name: "PUNCTUATION PIMIENTO",
         hp: 6_000,
         attack: 10.0,
         curse: Curse::Punctuation,
-        face: [" ;,; ", "(¬‿¬)", " ╯ ╰ "],
-        look: Look {
-            lobes: 2.0,
-            lobe_depth: 0.05,
-            ..look([225.0, 30.0, 50.0], [95.0, 5.0, 20.0], 112.0, 108.0)
-        },
+        kind: Kind::Pimiento,
+        color: (225, 30, 50),
     },
     Foe {
         name: "MIRROR MORITA",
         hp: 7_500,
         attack: 10.0,
         curse: Curse::Mirror,
-        face: [" ┌─┐ ", "(ɘ_ɘ)", " ╯ ╰ "],
-        look: Look {
-            wrinkles: true,
-            ..look([135.0, 45.0, 35.0], [45.0, 10.0, 8.0], 100.0, 120.0)
-        },
+        kind: Kind::Morita,
+        color: (160, 70, 45),
     },
     Foe {
         name: "SALT SCOTCH BONNET",
         hp: 9_000,
         attack: 9.0,
         curse: Curse::Shuffle,
-        face: [" ▄▄▄ ", "(ò_ó)", " ╯ ╰ "],
-        look: Look {
-            lobes: 5.0,
-            lobe_depth: 0.07,
-            ..look([255.0, 175.0, 25.0], [120.0, 60.0, 0.0], 118.0, 100.0)
-        },
+        kind: Kind::Bonnet,
+        color: (255, 175, 25),
     },
     Foe {
         name: "THE CAROLINA REAPER",
         hp: 16_000,
         attack: 7.0,
         curse: Curse::Fog,
-        face: [" ▄▀▀▄", "(×_×)", "╱▐█▌╲"],
-        look: Look {
-            bumps: 0.1,
-            hood: true,
-            ..look([175.0, 15.0, 30.0], [60.0, 0.0, 10.0], 100.0, 120.0)
-        },
+        kind: Kind::Reaper,
+        color: (200, 20, 40),
     },
 ];
 
@@ -124,8 +85,14 @@ const OUTRO: Duration = Duration::from_millis(1200);
 pub struct Fight {
     pub test: Test,
     pub foe: &'static Foe,
-    /// Enemy attack timer, 0..1.
+    /// When this fight began (drives the arena's clock).
+    pub born: Instant,
+    /// Enemy attack timer, 0..1. Full → the foe attacks.
     pub charge: f64,
+    /// A running attack: it lands `kind.hit_delay()` in, ends `kind.attack_len()` in.
+    pub attack_at: Option<Instant>,
+    landed: bool,
+    /// When the last attack landed (−1♥).
     pub hit_at: Option<Instant>,
     pub ended: Option<Instant>,
     seen_errors: u32,
@@ -192,7 +159,10 @@ impl Run {
         Fight {
             test,
             foe,
+            born: Instant::now(),
             charge: 0.0,
+            attack_at: None,
+            landed: false,
             hit_at: None,
             ended: None,
             seen_errors: 0,
@@ -234,12 +204,27 @@ impl Run {
             .last
             .map_or(0.0, |l| now.saturating_duration_since(l).as_secs_f64());
         f.last = Some(now);
-        f.charge += dt / attack + MISS_CHARGE * (f.test.errors - f.seen_errors) as f64;
+        let misses = f.test.errors - f.seen_errors;
         f.seen_errors = f.test.errors;
-        if f.charge >= 1.0 {
-            f.charge = 0.0;
-            self.hp = self.hp.saturating_sub(1);
-            f.hit_at = Some(now);
+        match f.attack_at {
+            // an attack plays out: the heart goes when it lands, not when it starts
+            Some(at) => {
+                let age = now.saturating_duration_since(at).as_secs_f64();
+                if !f.landed && age >= f.foe.kind.hit_delay() {
+                    f.landed = true;
+                    self.hp = self.hp.saturating_sub(1);
+                    f.hit_at = Some(now);
+                }
+                if age >= f.foe.kind.attack_len() {
+                    (f.attack_at, f.landed, f.charge) = (None, false, 0.0);
+                }
+            }
+            None => {
+                f.charge += dt / attack + MISS_CHARGE * misses as f64;
+                if f.charge >= 1.0 {
+                    (f.charge, f.attack_at) = (1.0, Some(now));
+                }
+            }
         }
         if self.hp == 0 || f.foe_hp() == 0 {
             f.ended = Some(now);
@@ -325,16 +310,18 @@ mod tests {
         run.take(1);
         assert_eq!((run.floor, run.sauces.as_slice()), (1, &[taken][..]));
 
-        // stand still: the foe hits once per attack until you're cooked
-        let attack = run.attack_secs(&FOES[1]);
+        // stand still: the foe attacks, each attack lands once, until you're cooked
         let c = fight(&mut run).test.target[0];
         fight(&mut run).test.type_char(c, now);
         run.tick(now);
-        for _ in 0..run.max_hp {
-            now += Duration::from_secs_f64(attack);
+        let (start_hp, mut landed) = (run.hp, 0);
+        while run.hp > 0 && landed < 50 {
+            let before = run.hp;
+            now += Duration::from_millis(50);
             run.tick(now);
+            landed += usize::from(run.hp < before);
         }
-        assert_eq!(run.hp, 0);
+        assert_eq!((run.hp, landed as u32), (0, start_hp));
         now += OUTRO;
         run.tick(now);
         assert!(matches!(run.stage, Stage::Over { won: false, .. }));

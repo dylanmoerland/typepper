@@ -1,6 +1,8 @@
 mod app;
 mod cast;
 mod engine;
+mod fight;
+mod foes;
 mod fx;
 mod mods;
 mod pepper;

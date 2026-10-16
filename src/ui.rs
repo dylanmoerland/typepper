@@ -8,8 +8,9 @@ use ratatui::widgets::{
     Axis, Block, BorderType, Chart, Clear, Dataset, GraphType, Padding, Paragraph,
 };
 
-use crate::cast::{self, Expr, Mood};
+use crate::cast;
 use crate::engine::{HOT, MODES, Mode, RANKS, Test, scoville};
+use crate::fight::{Arena, Geo};
 use crate::fx::{self, RANK_RGB, WHITE, anim_clock, hash, hsv, lerp, rank_color, since};
 use crate::mods::Sauce;
 use crate::pepper;
@@ -52,45 +53,78 @@ fn column(area: Rect) -> Rect {
 }
 
 /// Typing screen (practice test or roguelike fight) or practice results.
-pub fn draw(f: &mut Frame, t: &Test, fight: Option<(&Run, &Fight)>) {
+/// In fights `arena` holds what you see of the foe across frames.
+pub fn draw(f: &mut Frame, t: &Test, fight: Option<(&Run, &Fight)>, arena: &mut Option<Arena>) {
     let now = Instant::now();
     let col = column(f.area());
     if t.finished.is_some() {
-        results(f, col, t, now);
-    } else {
-        fx::speed_lines(f.buffer_mut(), t, now);
-        fx::flames(f.buffer_mut(), t, now);
-        let (panel, help, portrait) = typing(f, col, t, now, fight);
-        if !portrait {
-            fx::crowd(f.buffer_mut(), t, now, panel); // in fights the foe takes the stage
-        }
-        fx::tumblers(f.buffer_mut(), t, now, panel, help);
+        return results(f, col, t, now);
     }
-}
-
-/// Returns the HUD panel and help line rects so overlays can avoid them,
-/// and whether a foe portrait took the space above the panel.
-fn typing(
-    f: &mut Frame,
-    area: Rect,
-    t: &Test,
-    now: Instant,
-    fight: Option<(&Run, &Fight)>,
-) -> (Rect, Rect, bool) {
-    // in fights the foe's portrait sits on top; portrait + panel center as one block
-    let stage_h = if fight.is_some() && area.height > PORTRAIT_H + 18 {
-        PORTRAIT_H
-    } else {
-        0
-    };
-    let [_, stage, panel, _, help] = Layout::vertical([
-        Constraint::Fill(1),
-        Constraint::Length(stage_h),
+    // in fights the arena above the panel gets most of the free space
+    let above = if fight.is_some() { 3 } else { 1 };
+    let [_, panel, _, help] = Layout::vertical([
+        Constraint::Fill(above),
         Constraint::Length(18),
         Constraint::Fill(1),
         Constraint::Length(1),
     ])
-    .areas(area);
+    .areas(col);
+    fx::speed_lines(f.buffer_mut(), t, now);
+    fx::flames(f.buffer_mut(), t, now);
+    let geo = Geo {
+        screen: f.area(),
+        panel,
+    };
+    let arena = fight.map(|(_, fi)| {
+        let arena = arena.get_or_insert_with(|| Arena::new(fi, &geo));
+        arena.update(now, fi, &geo);
+        arena.draw_back(f.buffer_mut(), fi, now, &geo);
+        (arena, fi)
+    });
+    let (panel, text) = typing(f, panel, help, t, now, fight);
+    match arena {
+        Some((arena, fi)) => {
+            let geo = Geo {
+                screen: f.area(),
+                panel,
+            };
+            arena.deform_panel(f.buffer_mut(), fi, now, panel);
+            arena.draw_front(f.buffer_mut(), fi, now, &geo);
+            arena.draw_text(f.buffer_mut(), &geo, |i| text.pos(i), text.caret);
+        }
+        None => fx::crowd(f.buffer_mut(), t, now, panel),
+    }
+    fx::tumblers(f.buffer_mut(), t, now, panel, help);
+}
+
+/// Where the typing text sits on screen, so effects can start from a letter.
+struct TextGeom {
+    inner: Rect,
+    shown: Vec<(usize, usize)>,
+    caret: (u16, u16),
+}
+
+impl TextGeom {
+    fn pos(&self, i: usize) -> Option<(u16, u16)> {
+        let row = self.shown.iter().position(|&(s, e)| (s..e).contains(&i))?;
+        Some((
+            self.inner.x + (i - self.shown[row].0) as u16,
+            self.inner.y + row as u16,
+        ))
+    }
+}
+
+/// Draws the HUD panel; returns where it ended up (it reels when hit) and
+/// where the text is.
+fn typing(
+    f: &mut Frame,
+    panel: Rect,
+    help: Rect,
+    t: &Test,
+    now: Instant,
+    fight: Option<(&Run, &Fight)>,
+) -> (Rect, TextGeom) {
+    let area = f.area();
     let clock = anim_clock(t, now);
     let color = rank_color(t.rank);
     let ouch = fight.is_some_and(|(_, fi)| since(fi.hit_at, now) < OUCH);
@@ -196,19 +230,8 @@ fn typing(
             [a, Rect::default(), b]
         }
     };
-    // Doom-style portrait above the panel when there's room, else a text face
-    let portrait = stage.height == PORTRAIT_H;
     if let Some((_, fi)) = fight {
-        f.render_widget(Paragraph::new(foe_lines(fi, now, portrait)), foe_area);
-        if portrait {
-            let w = PORTRAIT_W.min(panel.width);
-            // follows the panel, so it reels with it when the foe lands a hit
-            let face = Rect::new(panel.x + (panel.width - w) / 2, stage.y, w, PORTRAIT_H);
-            let mood = foe_mood(fi, t, now);
-            toon::draw(f.buffer_mut(), face, 0.69, |x, y| {
-                cast::foe(&fi.foe.look, &mood, clock, x, y)
-            });
-        }
+        f.render_widget(Paragraph::new(foe_lines(fi)), foe_area);
     }
     let pop = t.combo > 0
         && t.combo.is_multiple_of(25)
@@ -299,13 +322,16 @@ fn typing(
         })
         .collect();
     f.render_widget(Paragraph::new(lines), text_inner);
-    fx::sparks(f.buffer_mut(), t, now, |i| {
-        let row = shown.iter().position(|&(s, e)| (s..e).contains(&i))?;
-        Some((
-            text_inner.x + (i - shown[row].0) as u16,
-            text_inner.y + row as u16,
-        ))
-    });
+    let geom = TextGeom {
+        inner: text_inner,
+        shown: shown.to_vec(),
+        caret: (text_inner.x, text_inner.y),
+    };
+    let geom = TextGeom {
+        caret: geom.pos(t.typed.len()).unwrap_or(geom.caret),
+        ..geom
+    };
+    fx::sparks(f.buffer_mut(), t, now, |i| geom.pos(i));
 
     f.render_widget(heat_bar(t.heat, t.rank, heat.width as usize), heat);
 
@@ -316,37 +342,7 @@ fn typing(
     };
     // style the span, not the line: a styled Line recolors the flames across the whole row
     f.render_widget(Line::from(hint.dark_gray()).centered(), help);
-    (panel, help, portrait)
-}
-
-const PORTRAIT_W: u16 = 30;
-const PORTRAIT_H: u16 = 13;
-
-/// What the foe's face is doing, from the fight's latest moments.
-fn foe_mood(fi: &Fight, t: &Test, now: Instant) -> Mood {
-    // it flinches when you finish a word, not on every key
-    let word = t
-        .hits
-        .iter()
-        .rev()
-        .take(40)
-        .find(|&&(_, i)| t.target.get(i) == Some(&' '))
-        .map(|h| h.0);
-    let word_ago = since(word, now).as_secs_f64();
-    let expr = match () {
-        _ if fi.foe_hp() == 0 => Expr::Dead,
-        _ if word_ago < 0.22 => Expr::Flinch,
-        _ if since(fi.hit_at, now) < Duration::from_millis(600) => Expr::Grin,
-        _ if fi.charge >= 0.8 => Expr::Windup,
-        _ if since(t.broke.map(|b| b.1), now) < Duration::from_millis(1100) => Expr::Laugh,
-        _ if t.rank >= HOT => Expr::Scared,
-        _ => Expr::Idle,
-    };
-    Mood {
-        expr,
-        hp: fi.foe_hp() as f64 / fi.foe.hp as f64,
-        flash: 1.0 - toon::smooth(word_ago / 0.08),
-    }
+    (panel, geom)
 }
 
 /// Heat gauge colored by the rank each segment belongs to, plus a Scoville readout.
@@ -605,59 +601,40 @@ fn big(n: impl ToString) -> Vec<String> {
         .collect()
 }
 
-/// Foe portrait, health and attack timer for the fight HUD.
-/// Foe name, health and attack timer for the fight HUD; with `portrait` the
-/// small text face is left out (the big one is above the panel).
-fn foe_lines(fi: &Fight, now: Instant, portrait: bool) -> Vec<Line<'static>> {
+/// Foe name, health and attack timer for the fight HUD (the foe itself is
+/// out in the arena).
+fn foe_lines(fi: &Fight) -> Vec<Line<'static>> {
     let foe = fi.foe;
-    let (r, g, b) = foe.color();
+    let (r, g, b) = foe.color;
     let dead = fi.foe_hp() == 0;
-    let struck = fi
-        .test
-        .hits
-        .last()
-        .is_some_and(|h| since(Some(h.0), now) < Duration::from_millis(80));
-    let face_style = match () {
-        _ if dead => Style::new().dark_gray(),
-        _ if since(fi.hit_at, now) < OUCH => Style::new().red().bold(),
-        _ if struck => Style::new().white().bold(),
-        _ => Style::new().fg(Color::Rgb(r, g, b)).bold(),
+    let name_style = if dead {
+        Style::new().dark_gray()
+    } else {
+        Style::new().fg(Color::Rgb(r, g, b)).bold()
     };
-    let face = match () {
-        _ if portrait => ["", "", ""],
-        _ if dead => ["     ", "(x_x)", "     "],
-        _ => foe.face,
-    };
-    let gap = if portrait { "" } else { "  " };
-    let indent = if portrait { "" } else { "       " };
     let hp_w = 20;
     let filled = (fi.foe_hp() as f64 / foe.hp as f64 * hp_w as f64).ceil() as usize;
     let charge = fi.charge.clamp(0.0, 1.0);
     let ticks = (charge * 10.0) as usize;
     let atk = lerp((255, 215, 0), (255, 30, 30), charge);
     vec![
+        Line::from(Span::styled(
+            if dead { "DEFEATED" } else { foe.name },
+            name_style,
+        )),
         Line::from(vec![
-            Span::styled(face[0], face_style),
-            gap.into(),
-            Span::styled(if dead { "DEFEATED" } else { foe.name }, face_style),
-        ]),
-        Line::from(vec![
-            Span::styled(face[1], face_style),
-            gap.into(),
             Span::styled("█".repeat(filled), Color::Rgb(r, g, b)),
             "░".repeat(hp_w - filled).dark_gray(),
             format!(" {}", fi.foe_hp()).dark_gray(),
         ]),
         Line::from(vec![
-            Span::styled(face[2], face_style),
-            gap.into(),
             "ATK ".dark_gray(),
             Span::styled("▰".repeat(ticks), atk),
             "▱".repeat(10 - ticks).dark_gray(),
         ]),
-        Line::from(format!("{indent}{}", foe.curse.name()).dark_gray().italic()),
+        Line::from(foe.curse.name().dark_gray().italic()),
         if dead {
-            Line::from(format!("{indent}K.O.!!")).magenta().bold()
+            Line::from("K.O.!!").magenta().bold()
         } else {
             Line::default()
         },
@@ -786,7 +763,7 @@ pub fn reward(f: &mut Frame, run: &Run, offers: &[Sauce], pick: usize) {
     ])
     .areas(col);
     let foe = &FOES[run.floor];
-    let (r, g, b) = foe.color();
+    let (r, g, b) = foe.color;
     let head = Line::from(vec![
         Span::styled(foe.name, Color::Rgb(r, g, b)).bold(),
         " DEFEATED · ".bold(),

@@ -33,6 +33,8 @@ pub struct App {
     screen: Screen,
     since: Instant,
     bot: Option<Bot>,
+    /// What you see of the current fight (foe motion, scars, flying words).
+    arena: Option<crate::fight::Arena>,
 }
 
 impl App {
@@ -41,6 +43,7 @@ impl App {
             screen: Screen::Title { pick: 1 },
             since: Instant::now(),
             bot: demo.then(Bot::new),
+            arena: None,
         }
     }
 
@@ -141,13 +144,15 @@ impl App {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame) {
+    pub fn draw(&mut self, f: &mut Frame) {
         let now = Instant::now();
         match &self.screen {
             Screen::Title { pick } => ui::title(f, *pick, (now - self.since).as_secs_f64()),
-            Screen::Practice { test, .. } => ui::draw(f, test, None),
+            Screen::Practice { test, .. } => ui::draw(f, test, None, &mut self.arena),
             Screen::Run(run) => match &run.stage {
-                Stage::Fight(fight) => ui::draw(f, &fight.test, Some((run, fight))),
+                Stage::Fight(fight) => {
+                    ui::draw(f, &fight.test, Some((run, fight)), &mut self.arena)
+                }
                 Stage::Reward { offers, pick, .. } => ui::reward(f, run, offers, *pick),
                 Stage::Over { won, .. } => ui::over(f, run, *won),
             },

@@ -23,16 +23,45 @@ const QUADS: [&str; 16] = [
 /// Render `scene` into `area`; `scale` > 1 zooms out (scene units per unit).
 /// Fully empty cells are left untouched so whatever is behind shows through.
 pub fn draw(buf: &mut Buffer, area: Rect, scale: f64, scene: impl Fn(f64, f64) -> Px) {
+    render(buf, area, scale, None, scene);
+}
+
+/// Like `draw`, but lit as if the flat shapes were rounded: `heat` (0..1)
+/// sets how strongly the flames below rim-light them.
+pub fn draw_lit(
+    buf: &mut Buffer,
+    area: Rect,
+    scale: f64,
+    heat: f64,
+    scene: impl Fn(f64, f64) -> Px,
+) {
+    render(buf, area, scale, Some(heat), scene);
+}
+
+fn render(
+    buf: &mut Buffer,
+    area: Rect,
+    scale: f64,
+    heat: Option<f64>,
+    scene: impl Fn(f64, f64) -> Px,
+) {
     let area = area.intersection(buf.area);
     let (ox, oy) = (area.width as f64 * PX_W, area.height as f64 * PX_H);
+    let (pw, ph) = (area.width as usize * 2, area.height as usize * 2);
+    let mut px: Vec<Px> = (0..pw * ph)
+        .map(|k| {
+            let (i, j) = ((k % pw) as f64 + 0.5, (k / pw) as f64 + 0.5);
+            scene((i * PX_W - ox) * scale, (j * PX_H - oy) * scale)
+        })
+        .collect();
+    if let Some(heat) = heat {
+        shade(&mut px, pw, ph, heat);
+    }
     let page = page_rgb();
     for row in 0..area.height {
         for col in 0..area.width {
-            let q: [Px; 4] = std::array::from_fn(|k| {
-                let i = col as f64 * 2.0 + (k % 2) as f64 + 0.5;
-                let j = row as f64 * 2.0 + (k / 2) as f64 + 0.5;
-                scene((i * PX_W - ox) * scale, (j * PX_H - oy) * scale)
-            });
+            let at = |k: usize| px[(row as usize * 2 + k / 2) * pw + col as usize * 2 + k % 2];
+            let q: [Px; 4] = std::array::from_fn(at);
             if q.iter().all(Option::is_none) {
                 continue;
             }
@@ -42,6 +71,98 @@ pub fn draw(buf: &mut Buffer, area: Rect, scale: f64, scene: impl Fn(f64, f64) -
                 .set_symbol(glyph)
                 .set_fg(color(fg))
                 .set_bg(color(bg));
+        }
+    }
+}
+
+/// Fake 3D: each silhouette's distance from its edge (two-pass chamfer, in
+/// scene units since pixels are 5×10) becomes a dome height, the slope of
+/// that dome a normal, and the normal gets a key light from the upper left,
+/// a glint, and an orange rim from the flames below. Inky pixels (outlines,
+/// pupils) stay inky so faces keep their definition.
+fn shade(px: &mut [Px], pw: usize, ph: usize, heat: f64) {
+    const DIAG: f64 = 11.2; // hypot(PX_W, PX_H)
+    const DOME: f64 = 38.0;
+    let mut d: Vec<f64> = px
+        .iter()
+        .map(|p| if p.is_some() { f64::MAX } else { 0.0 })
+        .collect();
+    let relax = |d: &mut Vec<f64>, k: usize, n: usize, w: f64| {
+        if d[n] + w < d[k] {
+            d[k] = d[n] + w;
+        }
+    };
+    for j in 0..ph {
+        for i in 0..pw {
+            let k = j * pw + i;
+            if d[k] == 0.0 {
+                continue;
+            }
+            if i > 0 {
+                relax(&mut d, k, k - 1, PX_W);
+            }
+            if j > 0 {
+                relax(&mut d, k, k - pw, PX_H);
+                if i > 0 {
+                    relax(&mut d, k, k - pw - 1, DIAG);
+                }
+                if i + 1 < pw {
+                    relax(&mut d, k, k - pw + 1, DIAG);
+                }
+            }
+        }
+    }
+    for j in (0..ph).rev() {
+        for i in (0..pw).rev() {
+            let k = j * pw + i;
+            if d[k] == 0.0 {
+                continue;
+            }
+            if i + 1 < pw {
+                relax(&mut d, k, k + 1, PX_W);
+            }
+            if j + 1 < ph {
+                relax(&mut d, k, k + pw, PX_H);
+                if i + 1 < pw {
+                    relax(&mut d, k, k + pw + 1, DIAG);
+                }
+                if i > 0 {
+                    relax(&mut d, k, k + pw - 1, DIAG);
+                }
+            }
+        }
+    }
+    let height = |k: usize| (d[k].min(DOME) / DOME).sqrt() * DOME;
+    let norm = |v: [f64; 3]| {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        v.map(|x| x / l)
+    };
+    let light = norm([-0.45, -0.7, 0.55]);
+    let half = norm([light[0], light[1], light[2] + 1.0]); // viewer at +z
+    for j in 0..ph {
+        for i in 0..pw {
+            let k = j * pw + i;
+            let Some(c) = px[k] else { continue };
+            if c[0] + c[1] + c[2] < 60.0 {
+                continue;
+            }
+            let gx = (height(if i + 1 < pw { k + 1 } else { k })
+                - height(if i > 0 { k - 1 } else { k }))
+                / (2.0 * PX_W);
+            let gy = (height(if j + 1 < ph { k + pw } else { k })
+                - height(if j > 0 { k - pw } else { k }))
+                / (2.0 * PX_H);
+            let n = norm([-gx, -gy, 1.0]);
+            let diffuse = (n[0] * light[0] + n[1] * light[1] + n[2] * light[2]).max(0.0);
+            let spec = (n[0] * half[0] + n[1] * half[1] + n[2] * half[2])
+                .max(0.0)
+                .powi(40);
+            let rim = (n[1] * 0.9 + 0.1).max(0.0).powi(2) * heat; // flames light it from below
+            let k2 = 0.55 + 0.6 * diffuse;
+            let flame = [255.0, 120.0, 30.0];
+            px[k] = Some(std::array::from_fn(|ch| {
+                (c[ch] * k2 + 255.0 * spec * 0.4 + flame[ch] * rim * 0.5).min(255.0)
+            }));
         }
     }
 }
