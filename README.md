@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://typepper.com"><img alt="typepper — a spicy little typing game for your terminal and browser: sprint, blitz, zen and survival" src="assets/logo/og.png" width="720"></a>
+  <a href="https://typepper.com"><img alt="typepper — a spicy little typing game for your terminal and browser: sprint, blitz, zen, survival and floor is lava" src="assets/logo/og.png" width="720"></a>
 </p>
 
 ## Play
