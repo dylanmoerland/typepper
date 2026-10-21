@@ -38,7 +38,7 @@ Six modes on a carousel: sprint, blitz, zen, survival, floor is lava and hot pur
 
 <p align="center"><img alt="FLOOR IS LAVA from level 10: words fall, one is locked onto and typed, missed words splash into rising lava until the run is cooked" src="assets/gifs/lava.gif" width="714"></p>
 
-**HOT PURSUIT:** a cop chases your caret down the text you've typed, leaving tire tracks; a wrong key stops you cold, and if it catches up you're busted.
+**HOT PURSUIT:** a cop chases your caret down the text you've typed, leaving tire tracks; a wrong key stops you cold, and if the cop catches up you're busted.
 
 **Streaks:** the caret catches fire, fever turns the trail to embers, and a broken combo shatters.
 
