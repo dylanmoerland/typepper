@@ -13,6 +13,9 @@ pub enum Mode {
     Survival,
     /// Words fall toward rising lava; type them before they land (see `lava.rs`).
     Lava(Aim),
+    /// Endless words with a cop on your tail that keeps speeding up; a wrong
+    /// key stays put until you type the right one.
+    Pursuit,
 }
 
 /// How FLOOR IS LAVA picks the word you're typing.
@@ -33,7 +36,7 @@ impl Default for Mode {
 impl Mode {
     /// Endless modes scored by words survived, with levels.
     pub fn leveled(self) -> bool {
-        matches!(self, Mode::Survival | Mode::Lava(_))
+        matches!(self, Mode::Survival | Mode::Lava(_) | Mode::Pursuit)
     }
 }
 
@@ -46,6 +49,7 @@ impl fmt::Display for Mode {
             Mode::Survival => write!(f, "survival"),
             Mode::Lava(Aim::Lock) => write!(f, "lock-on"),
             Mode::Lava(Aim::Free) => write!(f, "free"),
+            Mode::Pursuit => write!(f, "pursuit"),
         }
     }
 }
@@ -151,6 +155,15 @@ pub const LEVELS: [u32; 4] = [1, 4, 7, 10];
 const LEVEL_WORDS: u32 = 10;
 const DRAIN_STEP: f64 = 1.12;
 
+// ponytail: pursuit tuned on paper (cop from 25wpm at lv1 to ~69wpm at lv10); playtest
+/// Pursuit: the furthest the cop falls behind the caret, in chars.
+pub const LEAD_MAX: f64 = 30.0;
+/// Pursuit: the cop's starting speed at level 1, ×1.12 per start level above it.
+const COP_WPM: f64 = 25.0;
+const COP_START_STEP: f64 = 1.12;
+/// Pursuit: the cop speeds up once per `LEVEL_WORDS` words and per this many seconds.
+const COP_STEP_SECS: f64 = 20.0;
+
 /// A word finished with a correct space (drives the word sweep and +points).
 pub struct WordDone {
     pub at: Instant,
@@ -200,6 +213,11 @@ pub struct Test {
     pub fuel: f64,
     /// The level a leveled mode starts from (picked before the run).
     pub start_level: u32,
+    /// Pursuit: the cop's nose, as a target index; chars before it are eaten.
+    /// Negative until it reaches the start of the text.
+    pub cop: f64,
+    /// Pursuit: when the cop caught you.
+    pub busted: Option<Instant>,
     pub words_done: Vec<WordDone>,
     /// Backspaced chars: when, where, and what was typed there.
     pub erased: Vec<(Instant, usize, char)>,
@@ -221,6 +239,8 @@ impl Test {
             target: words.join(" ").chars().collect(),
             fuel: FUEL,
             start_level: 1,
+            // a full lead; the cop waits there for the first key
+            cop: -LEAD_MAX,
             ..Default::default()
         }
     }
@@ -228,6 +248,10 @@ impl Test {
     pub fn type_char(&mut self, c: char, now: Instant) {
         if self.finished.is_some() || self.typed.len() >= self.target.len() {
             return;
+        }
+        // pursuit: a wrong key doesn't move the caret, you have to hit the right one
+        if self.mode == Mode::Pursuit && self.target[self.typed.len()] != c {
+            return self.miss(now);
         }
         self.key_down(now);
         if self.target[self.typed.len()] == c {
@@ -269,11 +293,15 @@ impl Test {
         self.key_up(now);
         self.typed.push(c);
         self.frontier = self.frontier.max(self.typed.len());
+        if self.mode == Mode::Pursuit {
+            // the cop never falls more than LEAD_MAX behind
+            self.cop = self.cop.max(self.typed.len() as f64 - LEAD_MAX);
+        }
         let low = self.target.len() - self.typed.len() < 400;
         match self.mode {
             Mode::Words(_) if self.typed.len() == self.target.len() => self.finish(now),
             // endless modes keep a few lines queued (lava feeds its own text)
-            Mode::Time(_) | Mode::Zen | Mode::Survival if low => {
+            Mode::Time(_) | Mode::Zen | Mode::Survival | Mode::Pursuit if low => {
                 self.target.push(' ');
                 self.target.extend(random_words(50).join(" ").chars());
             }
@@ -331,8 +359,10 @@ impl Test {
         self.combo = 0;
     }
 
+    /// Pursuit has no backspace: there's never a wrong char to take back.
     pub fn backspace(&mut self, now: Instant) {
         if self.finished.is_none()
+            && self.mode != Mode::Pursuit
             && let Some(c) = self.typed.pop()
         {
             self.erased.push((now, self.typed.len(), c));
@@ -348,6 +378,10 @@ impl Test {
         let over = match self.mode {
             Mode::Time(s) => self.elapsed(now) >= Duration::from_secs(s),
             Mode::Survival => self.fuel <= 0.0,
+            Mode::Pursuit if self.lead() <= 0.0 => {
+                self.busted = Some(now);
+                true
+            }
             _ => false,
         };
         if over {
@@ -368,9 +402,39 @@ impl Test {
         self.combo >= 20 * MULT_STEPS
     }
 
-    /// Level in the endless word modes (survival, lava), from 1.
+    /// Level in the endless word modes (survival, lava, pursuit), from 1.
     pub fn level(&self) -> u32 {
-        self.start_level.max(1) + self.words / LEVEL_WORDS
+        match self.mode {
+            // the cop's steps, so stalling levels up too
+            Mode::Pursuit => self.start_level.max(1) + self.steps() as u32,
+            _ => self.start_level.max(1) + self.words / LEVEL_WORDS,
+        }
+    }
+
+    /// Pursuit: chars between the cop and the caret, 0..=`LEAD_MAX`.
+    pub fn lead(&self) -> f64 {
+        (self.typed.len() as f64 - self.cop).clamp(0.0, LEAD_MAX)
+    }
+
+    /// Pursuit: the cop's speed. Each step ramps it 4% plus 1% per start level.
+    pub fn cop_wpm(&self) -> f64 {
+        let start = self.start_level.max(1) as f64;
+        let ramp = 0.04 + start / 100.0;
+        COP_WPM * COP_START_STEP.powf(start - 1.0) * (1.0 + ramp).powf(self.steps())
+    }
+
+    fn cop_cps(&self) -> f64 {
+        self.cop_wpm() * 5.0 / 60.0
+    }
+
+    /// Pursuit: how far the cop has ramped up, by words and by time on the
+    /// clock (as of the last tick or key), fractional.
+    fn steps(&self) -> f64 {
+        let secs = match (self.started, self.last_tick) {
+            (Some(s), Some(t)) => t.saturating_duration_since(s).as_secs_f64(),
+            _ => 0.0,
+        };
+        self.words as f64 / LEVEL_WORDS as f64 + secs / COP_STEP_SECS
     }
 
     fn cool(&mut self, now: Instant) {
@@ -384,6 +448,8 @@ impl Test {
         self.heat *= (-HEAT_DECAY * dt).exp();
         if self.mode == Mode::Survival {
             self.fuel -= dt * DRAIN_STEP.powi(self.level() as i32 - 1);
+        } else if self.mode == Mode::Pursuit {
+            self.cop += dt * self.cop_cps();
         }
         self.update_rank(now);
     }
@@ -566,6 +632,109 @@ mod tests {
         assert!(t.finished.is_none());
         t.tick(t0 + Duration::from_secs(12));
         assert!(t.finished.is_some(), "out of fuel");
+    }
+
+    #[test]
+    fn pursuit_stops_on_errors_and_has_no_backspace() {
+        let t0 = Instant::now();
+        let mut t = Test::new(Mode::Pursuit, &["ab"; 100]);
+        type_str(&mut t, "ab", t0);
+        let t1 = t0 + Duration::from_secs(1);
+        t.type_char('x', t1);
+        assert_eq!(t.typed.len(), 2, "a wrong key stays put");
+        assert_eq!(
+            (t.keystrokes, t.errors, t.combo, t.best_combo),
+            (3, 1, 0, 2)
+        );
+        assert_eq!((t.last_key, t.last_error), (Some(t1), Some(t1)));
+        assert!(t.cop > 2.0 - LEAD_MAX, "the clock runs on a miss");
+        t.backspace(t1);
+        assert_eq!(t.typed.len(), 2, "backspace does nothing");
+        assert!(t.erased.is_empty());
+        type_str(&mut t, " a", t1);
+        assert_eq!(t.typed, ['a', 'b', ' ', 'a']);
+        assert_eq!((t.keystrokes, t.errors, t.combo, t.words), (5, 1, 2, 1));
+        assert!(!t.words_done[0].clean);
+        assert!((t.accuracy() - 80.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pursuit_cop_waits_then_trails_within_the_lead() {
+        let t0 = Instant::now();
+        let mut t = Test::new(Mode::Pursuit, &["ab"; 100]);
+        let mut now = t0 + Duration::from_secs(5);
+        t.tick(now);
+        assert_eq!(
+            (t.cop, t.lead()),
+            (-LEAD_MAX, LEAD_MAX),
+            "waits for the first key"
+        );
+        t.type_char('a', now);
+        assert_eq!(t.cop, 1.0 - LEAD_MAX, "starts a full lead behind");
+        // 600wpm: the cop can't keep up, so the cap drags it along
+        for _ in 0..600 {
+            now = type_steady(&mut t, 1, 20, now);
+            assert!(t.typed.len() as f64 - t.cop <= LEAD_MAX);
+        }
+        assert_eq!(t.lead(), LEAD_MAX);
+        assert!(
+            t.target.len() > t.typed.len() + 100,
+            "more words streamed in"
+        );
+        assert!(t.finished.is_none());
+    }
+
+    #[test]
+    fn pursuit_cop_ramps_with_start_level_words_and_time() {
+        // ponytail: the paper numbers, 25wpm ×1.12 per start level
+        for (lv, wpm) in [(1, 25.0), (4, 35.123), (7, 49.346), (10, 69.327)] {
+            let mut t = Test::new(Mode::Pursuit, &["a"]);
+            t.start_level = lv;
+            assert!((t.cop_wpm() - wpm).abs() < 1e-3, "lv{lv}: {}", t.cop_wpm());
+            assert_eq!(t.level(), lv);
+            // ten words is a step: 4% plus 1% per start level faster
+            t.words = 10;
+            let ramp = 1.04 + lv as f64 / 100.0;
+            assert!((t.cop_wpm() - wpm * ramp).abs() < 1e-3);
+            assert_eq!(t.level(), lv + 1);
+        }
+        // one long word at 40wpm keeps ahead of the cop but finishes no words,
+        // so only the clock ramps it (20.7s since the first key)
+        let long = "a".repeat(200);
+        let t0 = Instant::now();
+        let mut t = Test::new(Mode::Pursuit, &[&long]);
+        type_steady(&mut t, 70, 300, t0);
+        assert!(t.finished.is_none());
+        assert_eq!((t.words, t.level()), (0, 2), "time alone levels up");
+        assert!((t.cop_wpm() - 25.0 * 1.05f64.powf(20.7 / 20.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pursuit_busts_when_the_cop_catches_up() {
+        let t0 = Instant::now();
+        let mut t = Test::new(Mode::Pursuit, &["ab"; 100]);
+        let mut now = type_steady(&mut t, 5, 100, t0);
+        let (stall, caret) = (now, t.typed.len() as f64);
+        let mut lead = t.lead();
+        assert_eq!(lead, LEAD_MAX);
+        while t.finished.is_none() {
+            assert!(
+                lead > 0.0 && t.busted.is_none(),
+                "runs while there's a lead"
+            );
+            assert!(now - stall < Duration::from_secs(60), "never caught");
+            now += Duration::from_millis(16);
+            t.tick(now);
+            lead = caret - t.cop;
+        }
+        assert!(lead <= 0.0, "ends on the frame the cop reaches the caret");
+        assert_eq!((t.busted, t.finished), (Some(now), Some(now)));
+        // 30 chars at a flat 25wpm is 14.4s; the ramp gets there sooner
+        let secs = (now - stall).as_secs_f64();
+        assert!((13.5..14.4).contains(&secs), "caught after {secs}s");
+        assert!(t.cop_wpm() > 25.0, "it sped up while you stalled");
+        t.type_char(t.target[5], now);
+        assert_eq!(t.typed.len(), 5, "input ignored after busted");
     }
 
     #[test]

@@ -74,7 +74,7 @@ fn slot(m: Mode) -> usize {
         Mode::Words(_) => 0,
         Mode::Time(_) => 1,
         Mode::Zen => 2,
-        Mode::Survival => 3,
+        Mode::Survival | Mode::Pursuit => 3,
         Mode::Lava(_) => 4,
     }
 }

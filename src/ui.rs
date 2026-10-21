@@ -150,7 +150,7 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
             Mode::Words(n) => {
                 format!("{}/{n}", t.typed.iter().filter(|c| **c == ' ').count()).yellow()
             }
-            Mode::Zen | Mode::Lava(_) => format!("{} words", t.words).yellow(),
+            Mode::Zen | Mode::Lava(_) | Mode::Pursuit => format!("{} words", t.words).yellow(),
             Mode::Survival => fuel_gauge(t, fx::fuel_beat(t, now)),
         };
         let stats = Line::from(vec![
