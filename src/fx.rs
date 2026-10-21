@@ -2,6 +2,7 @@
 //! the frame buffer, so they stack freely. Order is set in `ui::draw`.
 
 use std::f64::consts::PI;
+use std::ops::Range;
 use std::time::Duration;
 
 use web_time::Instant;
@@ -725,6 +726,12 @@ pub fn vignette(buf: &mut Buffer, k: f64) {
     if k <= 0.0 || calm() {
         return;
     }
+    edges(buf, k, |_| (190, 0, 0));
+}
+
+/// Color creeping in from the screen edges, `k` 0..1; `c` picks it by
+/// whether the cell is on the left half.
+fn edges(buf: &mut Buffer, k: f64, c: impl Fn(bool) -> Rgb) {
     let (a, page) = (buf.area, page_rgb());
     for y in a.top()..a.bottom() {
         for x in a.left()..a.right() {
@@ -732,10 +739,87 @@ pub fn vignette(buf: &mut Buffer, k: f64) {
             let dy = (y - a.top()).min(a.bottom() - 1 - y) as f64 / 2.0;
             let d = dx.min(dy);
             if d < 1.0 {
-                buf[(x, y)].set_bg(lerp(page, (190, 0, 0), (1.0 - d) * k));
+                let left = (x - a.left()) * 2 < a.width;
+                buf[(x, y)].set_bg(lerp(page, c(left), (1.0 - d) * k));
             }
         }
     }
+}
+
+// ── pursuit ─────────────────────────────────────────────────────────────
+
+/// HOT PURSUIT's police blue (its card, the cop car) and the siren's red.
+pub const POLICE: Rgb = (60, 120, 255);
+pub const SIREN_RED: Rgb = (255, 40, 40);
+/// What's left of a letter the cop drove over.
+pub const TRACKS: &str = "═";
+pub const TRACKS_RGB: Rgb = (70, 72, 84);
+
+/// The siren's wig-wag, as on the menu card: true while red is lit, three
+/// flashes a second each. Calm keeps both lit, so this is only the phase.
+pub fn siren_red(t: &Test, now: Instant) -> bool {
+    (anim_clock(t, now) * 6.0) as i64 % 2 == 0
+}
+
+/// Pursuit: seconds until the cop reaches the caret at its current speed.
+pub fn bust_in(t: &Test) -> f64 {
+    t.lead() / (t.cop_wpm() * 5.0 / 60.0)
+}
+
+/// Pursuit with the cop under 3s away: a flash (0..1) on every red of the
+/// siren, like survival's heartbeat.
+pub fn siren_beat(t: &Test, now: Instant) -> f64 {
+    if t.mode != Mode::Pursuit || t.started.is_none() || bust_in(t) >= 3.0 || calm() {
+        return 0.0;
+    }
+    (-(anim_clock(t, now) * 3.0).fract() * 10.0).exp()
+}
+
+/// The cop car: three cells of police blue ending at `hood` (left of the
+/// text while it waits to drive in), the light bar on its back two lit red
+/// and blue in turn. Steady in calm; dark until the chase starts. Cells over
+/// `under` (the text box's edge) stay hidden: it drives out from under it.
+pub fn cop(buf: &mut Buffer, t: &Test, now: Instant, hood: (i32, u16), under: Range<i32>) {
+    let red_on = siren_red(t, now);
+    let light = |c: Rgb, on: bool| match t.started.is_some() && (on || calm()) {
+        true => rgb(c),
+        false => lerp(page_rgb(), c, 0.3),
+    };
+    let tops = [
+        light(SIREN_RED, red_on),
+        light(mix(POLICE, WHITE, 0.4), !red_on),
+        // the hood: the page behind it, so paper doesn't repaint the blue
+        match crate::theme::is_light() {
+            true => crate::theme::page(),
+            false => Color::Reset,
+        },
+    ];
+    for (k, top) in tops.into_iter().enumerate() {
+        let x = hood.0 - 2 + k as i32;
+        if !under.contains(&x) {
+            put(
+                buf,
+                x,
+                hood.1 as i32,
+                "▄",
+                Style::new().fg(rgb(POLICE)).bg(top),
+            );
+        }
+    }
+}
+
+/// Pursuit, the cop nearly on you: its lights wash in from the screen
+/// edges, `k` 0..1, red on one side and blue on the other, swapping sides
+/// with the siren (a steady split in calm).
+pub fn siren_wash(buf: &mut Buffer, t: &Test, now: Instant, k: f64) {
+    if k <= 0.0 {
+        return;
+    }
+    let swap = !calm() && !siren_red(t, now);
+    edges(buf, k, |left| match left != swap {
+        true => (190, 0, 0),
+        false => (20, 60, 210),
+    });
 }
 
 // ── results ─────────────────────────────────────────────────────────────
@@ -853,8 +937,11 @@ pub fn fire(v: f64) -> Color {
 }
 
 pub fn rank_color(r: usize) -> Color {
-    let (red, g, b) = RANK_RGB[r];
-    Color::Rgb(red, g, b)
+    rgb(RANK_RGB[r])
+}
+
+pub fn rgb((r, g, b): Rgb) -> Color {
+    Color::Rgb(r, g, b)
 }
 
 pub fn mix(a: Rgb, b: Rgb, k: f64) -> Rgb {

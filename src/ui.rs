@@ -9,14 +9,18 @@ use ratatui::widgets::{
 };
 
 use crate::best::{self, Outcome};
-use crate::engine::{FUEL, HOT, Mode, RANKS, Test, scoville};
-use crate::fx::{self, RANK_RGB, WHITE, anim_clock, hash, hsv, lerp, rank_color, since};
+use crate::engine::{FUEL, HOT, LEAD_MAX, Mode, RANKS, Test, scoville};
+use crate::fx::{
+    self, POLICE, RANK_RGB, Rgb, SIREN_RED, WHITE, anim_clock, hash, hsv, lerp, rank_color, rgb,
+    since,
+};
 use crate::settings::{calm, touch};
 use crate::{menu, pepper};
 
 const FLASH: Duration = Duration::from_millis(120);
 const SHAKE: Duration = Duration::from_millis(250);
 const CALLOUT: Duration = Duration::from_millis(1200);
+const MISS_RED: Color = Color::Rgb(200, 30, 30);
 
 const DIGITS: [[&str; 5]; 10] = [
     ["███", "█ █", "█ █", "█ █", "███"],
@@ -68,10 +72,27 @@ pub fn draw(f: &mut Frame, t: &Test, outcome: Option<Outcome>) {
     fx::caret_flame(f.buffer_mut(), t, now, text.caret);
     fx::shatter(f.buffer_mut(), t, now, combo);
     fx::tumblers(f.buffer_mut(), t, now, panel, help);
+    // the cop rides over the effects that pass behind the text, and under
+    // the box's left border and padding
+    if let Some(hood) = text.cop {
+        let x = text.inner.x as i32;
+        fx::cop(f.buffer_mut(), t, now, hood, x - 2..x);
+    }
     // survival nearly dry: the edges throb red with the heartbeat
     if t.fuel < 2.0 {
         let beat = fx::fuel_beat(t, now);
         fx::vignette(f.buffer_mut(), (1.0 - t.fuel / 2.0) * (0.4 + 0.6 * beat));
+    }
+    // pursuit, under 2s from a bust: the siren lights up the edges
+    let bust = fx::bust_in(t);
+    if t.mode == Mode::Pursuit && t.started.is_some() && bust < 2.0 {
+        let beat = fx::siren_beat(t, now);
+        fx::siren_wash(
+            f.buffer_mut(),
+            t,
+            now,
+            (1.0 - bust / 2.0) * (0.5 + 0.5 * beat),
+        );
     }
 }
 
@@ -88,6 +109,8 @@ struct TextGeom {
     inner: Rect,
     shown: Vec<(usize, usize)>,
     caret: (u16, u16),
+    /// Pursuit: where the cop car's hood is (see `cop_at`).
+    cop: Option<(i32, u16)>,
 }
 
 impl TextGeom {
@@ -97,6 +120,23 @@ impl TextGeom {
             self.inner.x + (i - self.shown[row].0) as u16,
             self.inner.y + row as u16,
         ))
+    }
+
+    /// Pursuit: the cell for the cop car's hood, the last letter it ate (the
+    /// car reaches back two cells from there). Off the top of the window, or
+    /// before the text starts, it waits by the top row's left edge, out past
+    /// the border but no further left than `lo`, and drives in as it closes.
+    fn cop_at(&self, t: &Test, lo: u16) -> Option<(i32, u16)> {
+        if t.mode != Mode::Pursuit {
+            return None;
+        }
+        let hood = t.cop.floor() as i64 - 1;
+        let start = self.shown.first()?.0 as i64;
+        if hood >= start {
+            return self.pos(hood as usize).map(|(x, y)| (x as i32, y));
+        }
+        let x = (self.inner.x as i64 + hood - start).max(lo as i64);
+        Some((x as i32, self.inner.y))
     }
 }
 
@@ -150,8 +190,9 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
             Mode::Words(n) => {
                 format!("{}/{n}", t.typed.iter().filter(|c| **c == ' ').count()).yellow()
             }
-            Mode::Zen | Mode::Lava(_) | Mode::Pursuit => format!("{} words", t.words).yellow(),
+            Mode::Zen | Mode::Lava(_) => format!("{} words", t.words).yellow(),
             Mode::Survival => fuel_gauge(t, fx::fuel_beat(t, now)),
+            Mode::Pursuit => lead_gauge(t, fx::siren_beat(t, now)),
         };
         let stats = Line::from(vec![
             progress.bold(),
@@ -239,6 +280,7 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         true => 2,
         false => 1,
     };
+    let lo = text.x; // the cop waits out here, clear of the box's border
     let text = Rect {
         x: text.x + dx,
         width: text.width.saturating_sub(2),
@@ -266,11 +308,17 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
     f.render_widget(block, text);
     let (wrapped, first) = visible(t, text_inner.width as usize);
     let shown = &wrapped[first..(first + text_inner.height as usize).min(wrapped.len())];
+    // pursuit: what the cop drove over is tire tracks
+    let tracks = Style::new().fg(rgb(fx::TRACKS_RGB));
     let lines: Vec<Line> = shown
         .iter()
         .map(|&(start, end)| {
             (start..end)
-                .map(|i| Span::styled(t.target[i].to_string(), letter(t, i, clock)))
+                .map(|i| match (eaten(t, i), t.target[i]) {
+                    (true, ' ') => Span::raw(" "),
+                    (true, _) => Span::styled(fx::TRACKS, tracks),
+                    _ => Span::styled(t.target[i].to_string(), letter(t, i, clock)),
+                })
                 .collect()
         })
         .collect();
@@ -279,9 +327,11 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         inner: text_inner,
         shown: shown.to_vec(),
         caret: (text_inner.x, text_inner.y),
+        cop: None,
     };
     let geom = TextGeom {
         caret: geom.pos(t.typed.len()).unwrap_or(geom.caret),
+        cop: geom.cop_at(t, lo),
         ..geom
     };
     let pos = |i| geom.pos(i);
@@ -316,17 +366,28 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
 /// `beat` (0..1) flashes it like a heartbeat when nearly dry.
 fn fuel_gauge(t: &Test, beat: f64) -> Span<'static> {
     let k = (t.fuel / FUEL).clamp(0.0, 1.0);
-    let ticks = (k * 10.0).ceil() as usize;
-    let s = format!(
-        "LV{} {}{}",
-        t.level(),
-        "▰".repeat(ticks),
-        "▱".repeat(10 - ticks)
-    );
     let c = match beat {
         0.0 => lerp((255, 30, 30), (255, 215, 0), k * 2.0),
         _ => lerp((255, 30, 30), WHITE, 0.7 * beat),
     };
+    gauge(t.level(), k, c)
+}
+
+/// Pursuit: your lead on the cop, police blue while it's far back, siren red
+/// as it closes in, plus the level. `beat` (0..1) flashes it with the siren.
+fn lead_gauge(t: &Test, beat: f64) -> Span<'static> {
+    let k = t.lead() / LEAD_MAX;
+    let c = match beat {
+        0.0 => lerp(SIREN_RED, POLICE, k * 2.0),
+        _ => lerp(SIREN_RED, WHITE, 0.7 * beat),
+    };
+    gauge(t.level(), k, c)
+}
+
+/// "LV3 ▰▰▰▰▱▱▱▱▱▱": the level and ten ticks filled to `k` (0..1).
+fn gauge(level: u32, k: f64, c: Color) -> Span<'static> {
+    let ticks = (k * 10.0).ceil() as usize;
+    let s = format!("LV{level} {}{}", "▰".repeat(ticks), "▱".repeat(10 - ticks));
     Span::styled(s, c)
 }
 
@@ -368,9 +429,16 @@ fn visible(t: &Test, width: usize) -> (Vec<(usize, usize)>, usize) {
     (lines, caret_line.saturating_sub(1))
 }
 
+/// Pursuit: the cop has driven over target index `i`.
+fn eaten(t: &Test, i: usize) -> bool {
+    t.mode == Mode::Pursuit && (i as f64) < t.cop.floor()
+}
+
 fn letter(t: &Test, i: usize, clock: f64) -> Style {
     let c = t.target[i];
     let caret = t.typed.len();
+    // pursuit: a wrong key leaves the caret red until you hit the right one
+    let stuck = t.mode == Mode::Pursuit && t.last_error.is_some() && t.last_error == t.last_key;
     match t.typed.get(i) {
         Some(&typed) if typed != c => {
             return if c == ' ' {
@@ -380,6 +448,7 @@ fn letter(t: &Test, i: usize, clock: f64) -> Style {
             };
         }
         Some(_) => {}
+        None if i == caret && stuck => return Style::new().white().bold().bg(MISS_RED),
         None if i == caret => return Style::new().black().bg(rank_color(t.rank.max(3))),
         // at reaper the word you're about to type glows
         None if t.rank == 6 && !t.target[caret..i].contains(&' ') => return Style::new().gray(),
@@ -470,8 +539,12 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         true => [Rect::default(), top],
         false => Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)]).areas(top),
     };
-    let [_, label, _, score, _, peak, best_row, _] = Layout::vertical([
+    // a busted chase says so over the score
+    let busted = u16::from(t.busted.is_some());
+    let [_, banner, _, label, _, score, _, peak, best_row, _] = Layout::vertical([
         Constraint::Fill(1),
+        Constraint::Length(busted), // BUSTED!
+        Constraint::Length(busted),
         Constraint::Length(1), // SCORE
         Constraint::Length(1),
         Constraint::Length(5), // digits
@@ -498,6 +571,9 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         &pose,
     );
 
+    if busted > 0 {
+        f.render_widget(busted_line(t, now, secs).centered(), banner);
+    }
     f.render_widget(Line::from("SCORE").dark_gray().centered(), label);
     let shown = (t.score as f64 * ease(0.0, 0.8)).round() as u64;
     let digits: Vec<Line> = big(shown)
@@ -634,9 +710,15 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         m if m.leveled() => format!("{} lv{}", menu::label(m), t.level()),
         m => menu::label(m),
     };
-    let line = match narrow {
-        true => format!("{mode} · {took:.1}s · {} slips", t.errors),
-        false => format!(
+    let line = match (narrow, t.mode) {
+        (true, _) => format!("{mode} · {took:.1}s · {} slips", t.errors),
+        // pursuit: wrong keys never land, they're all slips
+        (false, Mode::Pursuit) => format!(
+            "{mode} · {took:.1}s · {} correct · {} slips",
+            t.correct(),
+            t.errors
+        ),
+        (false, _) => format!(
             "{mode} · {:.1}s · {} correct · {} wrong · {} slips",
             took,
             t.correct(),
@@ -654,6 +736,35 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         .centered(),
         help,
     );
+}
+
+/// "▄▄▄  BUSTED!  ▄▄▄" between the cop's lights: it lands white-hot, then
+/// takes the color of whichever light is lit (calm: both lit, steady red).
+fn busted_line(t: &Test, now: Instant, secs: f64) -> Line<'static> {
+    let red_on = fx::siren_red(t, now);
+    let light = |c: Rgb, on: bool| {
+        let c = match on || calm() {
+            true => rgb(c),
+            false => lerp(fx::page_rgb(), c, 0.3),
+        };
+        // on paper: the page behind it, so the dim light isn't repainted dark
+        let style = Style::new().fg(c);
+        let style = match crate::theme::is_light() {
+            true => style.bg(crate::theme::page()),
+            false => style,
+        };
+        Span::styled("▄▄▄", style)
+    };
+    let word = match secs < 0.15 {
+        true => WHITE,
+        false if red_on || calm() => SIREN_RED,
+        false => POLICE,
+    };
+    Line::from(vec![
+        light(SIREN_RED, red_on),
+        Span::styled("  BUSTED!  ", Style::new().fg(rgb(word)).bold()),
+        light(POLICE, !red_on),
+    ])
 }
 
 /// 5-row block glyphs: digits plus the letters of the logo.
