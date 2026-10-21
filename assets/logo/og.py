@@ -10,7 +10,7 @@ OUT = sys.argv[1]
 BG, INK, DIM = '#0b0a0c', '#c8c4cc', '#6e6a74'
 # the heat ranks, bell pepper → reaper (matches fx::RANK_RGB)
 RANKS = ['#787878', '#469646', '#6ed750', '#ffd700', '#ff8c00', '#ff321e', '#ff00c8']
-MODES = [('SPRINT', '#6ed750'), ('BLITZ', '#ffd700'), ('ZEN', '#3cc8be'), ('SURVIVAL', '#ff321e'), ('LAVA', '#ff6e14')]
+MODES = [('SPRINT', '#6ed750'), ('BLITZ', '#ffd700'), ('ZEN', '#3cc8be'), ('SURVIVAL', '#ff321e'), ('LAVA', '#ff6e14'), ('PURSUIT', '#3c78ff')]
 # Departure Mono is a pixel font on an 11px grid: sizes are multiples of 11.
 # Without installing it: FONTCONFIG_FILE=<conf with <dir>assets/fonts</dir>>
 FONT = 'font-family="Departure Mono"'

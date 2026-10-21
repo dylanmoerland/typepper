@@ -42,14 +42,14 @@ record() {
 want() { [ -z "$ONLY" ] || case " $ONLY " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 ONLY="$*"
 
-# The menu starts on BLITZ; cards go SPRINT BLITZ ZEN SURVIVAL LAVA.
+# The menu starts on BLITZ; cards go SPRINT BLITZ ZEN SURVIVAL LAVA PURSUIT.
 
 # hero: a swipe through the carousel, then BLITZ climbing to reaper and fever
 want hero && record hero 200 100x45 "2:right 3:left 4:enter 15:esc 15.4:esc" 1.2..14.2
 
-# menu: a slow lap of all five cards (scenery cross-fades, blur, title decode)
+# menu: a slow lap of all six cards (scenery cross-fades, blur, title decode)
 want menu && record menu 200 100x45 \
-  "1.5:right 3:right 4.5:right 6:right 7.5:right 9:esc" 0.8..8.8
+  "1.5:right 3:right 4.5:right 6:right 7.5:right 9:right 10.5:esc" 0.8..10.3
 
 # lava: FLOOR IS LAVA from level 10 with a typist too slow to keep up, so
 # words pile up and land, the lava rises, and the run ends cooked
