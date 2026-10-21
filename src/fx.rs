@@ -616,7 +616,13 @@ pub fn word_sweep(
                     0 => Style::new()
                         .fg(Color::Black)
                         .bg(Color::Rgb(rgb.0, rgb.1, rgb.2)),
-                    1 | 2 => Style::new().fg(Color::White).bold(),
+                    // tire tracks on paper pin the page behind them (see
+                    // `tracks`); hand them back to the repaint so the white
+                    // turns to ink, as it does over a letter
+                    1 | 2 => match crate::theme::is_light() && buf[p].bg == crate::theme::page() {
+                        true => Style::new().fg(Color::White).bg(Color::Reset).bold(),
+                        false => Style::new().fg(Color::White).bold(),
+                    },
                     _ => continue,
                 };
                 buf[p].set_style(style);

@@ -417,8 +417,9 @@ impl Test {
     /// Level in the endless word modes (survival, lava, pursuit), from 1.
     pub fn level(&self) -> u32 {
         match self.mode {
-            // the cop's steps, so stalling levels up too
-            Mode::Pursuit => self.start_level.max(1) + self.steps() as u32,
+            // the cop's steps, so stalling levels up too, up to the step the
+            // cop hits top speed (a week's frame gap would read lv30241)
+            Mode::Pursuit => self.start_level.max(1) + self.steps().min(self.top_steps()) as u32,
             _ => self.start_level.max(1) + self.words / LEVEL_WORDS,
         }
     }
@@ -441,10 +442,21 @@ impl Test {
 
     /// Pursuit: the cop's speed. Each step ramps it 4% plus 1% per start level.
     pub fn cop_wpm(&self) -> f64 {
+        let (wpm, ramp) = self.cop_curve();
+        (wpm * (1.0 + ramp).powf(self.steps())).min(COP_WPM_MAX)
+    }
+
+    /// Pursuit: the steps it takes the cop to reach `COP_WPM_MAX`.
+    fn top_steps(&self) -> f64 {
+        let (wpm, ramp) = self.cop_curve();
+        (COP_WPM_MAX / wpm).ln() / (1.0 + ramp).ln()
+    }
+
+    /// Pursuit: the cop's speed before any steps, and its ramp per step.
+    fn cop_curve(&self) -> (f64, f64) {
         let start = self.start_level.max(1) as f64;
-        let ramp = 0.04 + start / 100.0;
-        let wpm = COP_WPM * COP_START_STEP.powf(start - 1.0) * (1.0 + ramp).powf(self.steps());
-        wpm.min(COP_WPM_MAX)
+        let wpm = COP_WPM * COP_START_STEP.powf(start - 1.0);
+        (wpm, 0.04 + start / 100.0)
     }
 
     fn cop_cps(&self) -> f64 {
@@ -802,6 +814,8 @@ mod tests {
             assert_eq!((t.busted, t.finished), (Some(week), Some(week)));
             assert!(t.cop.is_finite(), "cop at {}", t.cop);
             assert_eq!((t.cop_wpm(), t.lead()), (COP_WPM_MAX, 0.0));
+            // lv1 tops out at 25wpm × 1.05^75.6: the level stops there too
+            assert_eq!(t.level(), 76);
             assert_eq!(t.typed.len(), 2);
         }
     }
