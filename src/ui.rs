@@ -309,7 +309,7 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
     let (wrapped, first) = visible(t, text_inner.width as usize);
     let shown = &wrapped[first..(first + text_inner.height as usize).min(wrapped.len())];
     // pursuit: what the cop drove over is tire tracks
-    let tracks = Style::new().fg(rgb(fx::TRACKS_RGB));
+    let tracks = fx::tracks();
     let lines: Vec<Line> = shown
         .iter()
         .map(|&(start, end)| {
@@ -437,8 +437,6 @@ fn eaten(t: &Test, i: usize) -> bool {
 fn letter(t: &Test, i: usize, clock: f64) -> Style {
     let c = t.target[i];
     let caret = t.typed.len();
-    // pursuit: a wrong key leaves the caret red until you hit the right one
-    let stuck = t.mode == Mode::Pursuit && t.last_error.is_some() && t.last_error == t.last_key;
     match t.typed.get(i) {
         Some(&typed) if typed != c => {
             return if c == ' ' {
@@ -448,7 +446,8 @@ fn letter(t: &Test, i: usize, clock: f64) -> Style {
             };
         }
         Some(_) => {}
-        None if i == caret && stuck => return Style::new().white().bold().bg(MISS_RED),
+        // pursuit: a wrong key leaves the caret red until you hit the right one
+        None if i == caret && t.stuck => return Style::new().white().bold().bg(MISS_RED),
         None if i == caret => return Style::new().black().bg(rank_color(t.rank.max(3))),
         // at reaper the word you're about to type glows
         None if t.rank == 6 && !t.target[caret..i].contains(&' ') => return Style::new().gray(),
@@ -539,12 +538,9 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         true => [Rect::default(), top],
         false => Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)]).areas(top),
     };
-    // a busted chase says so over the score
-    let busted = u16::from(t.busted.is_some());
-    let [_, banner, _, label, _, score, _, peak, best_row, _] = Layout::vertical([
+    // a busted chase says so on the SCORE row: short screens have none to spare
+    let [_, label, _, score, _, peak, best_row, _] = Layout::vertical([
         Constraint::Fill(1),
-        Constraint::Length(busted), // BUSTED!
-        Constraint::Length(busted),
         Constraint::Length(1), // SCORE
         Constraint::Length(1),
         Constraint::Length(5), // digits
@@ -571,10 +567,11 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         &pose,
     );
 
-    if busted > 0 {
-        f.render_widget(busted_line(t, now, secs).centered(), banner);
-    }
-    f.render_widget(Line::from("SCORE").dark_gray().centered(), label);
+    let label_line = match t.busted {
+        Some(_) => busted_line(t, now, secs),
+        None => Line::from("SCORE").dark_gray(),
+    };
+    f.render_widget(label_line.centered(), label);
     let shown = (t.score as f64 * ease(0.0, 0.8)).round() as u64;
     let digits: Vec<Line> = big(shown)
         .iter()
@@ -738,8 +735,9 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     );
 }
 
-/// "▄▄▄  BUSTED!  ▄▄▄" between the cop's lights: it lands white-hot, then
-/// takes the color of whichever light is lit (calm: both lit, steady red).
+/// "▄▄▄  BUSTED! · SCORE  ▄▄▄" between the cop's lights: BUSTED! lands
+/// white-hot, then takes the color of whichever light is lit (calm: both
+/// lit, steady red).
 fn busted_line(t: &Test, now: Instant, secs: f64) -> Line<'static> {
     let red_on = fx::siren_red(t, now);
     let light = |c: Rgb, on: bool| {
@@ -762,7 +760,8 @@ fn busted_line(t: &Test, now: Instant, secs: f64) -> Line<'static> {
     };
     Line::from(vec![
         light(SIREN_RED, red_on),
-        Span::styled("  BUSTED!  ", Style::new().fg(rgb(word)).bold()),
+        Span::styled("  BUSTED!", Style::new().fg(rgb(word)).bold()),
+        " · SCORE  ".dark_gray(),
         light(POLICE, !red_on),
     ])
 }
@@ -805,11 +804,59 @@ pub fn big(n: impl ToString) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap;
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn wraps_after_spaces() {
         let text: Vec<char> = "aa bb cc dddddddd".chars().collect();
         assert_eq!(wrap(&text, 6), vec![(0, 6), (6, 9), (9, 15), (15, 17)]);
+    }
+
+    /// Pursuit, phone and desktop widths: wherever the cop is, its car rides
+    /// a row of the text box, never past the text on the right, never off the
+    /// panel on the left (it waits by the box's edge), inside the text once
+    /// it's driving on it, and never over the caret or what's left to type.
+    #[test]
+    fn the_cop_keeps_to_the_text_box_behind_the_caret() {
+        let now = Instant::now();
+        let words = ["hot", "pursuit", "on", "the", "open", "road"].repeat(8);
+        for w in [40, 80] {
+            for caret in [0, 3, 12, 25, 40, 50, 61] {
+                for lead in [LEAD_MAX, 20.0, 6.5, 1.0, 0.2] {
+                    let mut t = Test::new(Mode::Pursuit, &words);
+                    t.typed = t.target[..caret].to_vec();
+                    t.started = Some(now);
+                    t.cop = caret as f64 - lead;
+                    let mut geom = None;
+                    let mut term = Terminal::new(TestBackend::new(w, 19)).unwrap();
+                    term.draw(|f| {
+                        let (panel, help) = (Rect::new(0, 0, w, 18), Rect::new(0, 18, w, 1));
+                        geom = Some(typing(f, panel, help, &t, now).0);
+                    })
+                    .unwrap();
+                    let g = geom.unwrap();
+                    let case = format!("{w} wide, caret {caret}, lead {lead}");
+                    let hood = g.cop.expect(&case);
+                    // as `draw` paints it: the box's border and padding hide it
+                    let x0 = g.inner.x as i32;
+                    let cells: Vec<i32> = (hood.0 - 2..=hood.0)
+                        .filter(|x| !(x0 - 2..x0).contains(x))
+                        .collect();
+                    assert!(!cells.is_empty(), "{case}: the cop is out of sight");
+                    let on_text = t.cop.floor() as usize > g.shown[0].0;
+                    let ahead: Vec<_> = (caret..g.shown.last().unwrap().1)
+                        .filter_map(|i| g.pos(i))
+                        .collect();
+                    for &x in &cells {
+                        let at = (x as u16, hood.1);
+                        assert!(g.inner.y <= at.1 && at.1 < g.inner.bottom(), "{case}");
+                        assert!(0 < x && x < g.inner.right() as i32, "{case}: x {x}");
+                        assert!(!on_text || x >= x0, "{case}: x {x} left of the text");
+                        assert!(at != g.caret && !ahead.contains(&at), "{case}: {at:?}");
+                    }
+                }
+            }
+        }
     }
 }

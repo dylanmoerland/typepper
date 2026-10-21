@@ -163,6 +163,10 @@ const COP_WPM: f64 = 25.0;
 const COP_START_STEP: f64 = 1.12;
 /// Pursuit: the cop speeds up once per `LEVEL_WORDS` words and per this many seconds.
 const COP_STEP_SECS: f64 = 20.0;
+// ponytail: a ceiling no human reaches, only there to keep the cop finite
+// after a huge frame gap (a suspended laptop), where the ramp overflows to inf
+/// Pursuit: the cop's top speed.
+const COP_WPM_MAX: f64 = 1000.0;
 
 /// A word finished with a correct space (drives the word sweep and +points).
 pub struct WordDone {
@@ -218,6 +222,8 @@ pub struct Test {
     pub cop: f64,
     /// Pursuit: when the cop caught you.
     pub busted: Option<Instant>,
+    /// Pursuit: the last key was wrong, so the caret waits for the right one.
+    pub stuck: bool,
     pub words_done: Vec<WordDone>,
     /// Backspaced chars: when, where, and what was typed there.
     pub erased: Vec<(Instant, usize, char)>,
@@ -253,8 +259,11 @@ impl Test {
         if self.mode == Mode::Pursuit && self.target[self.typed.len()] != c {
             return self.miss(now);
         }
-        self.key_down(now);
+        if !self.key_down(now) {
+            return;
+        }
         if self.target[self.typed.len()] == c {
+            self.stuck = false;
             // instant wpm / 60: 12 / gap / 60
             let speed = self.last_key.map_or(1.0, |t| {
                 (0.2 / now.saturating_duration_since(t).as_secs_f64().max(0.01)).clamp(0.5, 3.0)
@@ -317,19 +326,25 @@ impl Test {
 
     /// A wrong key that doesn't move the cursor (lava: no word to type it into).
     pub fn miss(&mut self, now: Instant) {
-        if self.finished.is_some() {
+        if self.finished.is_some() || !self.key_down(now) {
             return;
         }
-        self.key_down(now);
+        self.stuck = self.mode == Mode::Pursuit;
         self.mistake(now);
         self.key_up(now);
     }
 
     /// What every keystroke does first: start the clock, cool, count it.
-    fn key_down(&mut self, now: Instant) {
+    /// False if the cop got to the caret first: the run is over, the key lost.
+    fn key_down(&mut self, now: Instant) -> bool {
         self.started.get_or_insert(now);
         self.cool(now);
+        if self.caught(now) {
+            self.finish(now);
+            return false;
+        }
         self.keystrokes += 1;
+        true
     }
 
     /// ...and last.
@@ -378,10 +393,7 @@ impl Test {
         let over = match self.mode {
             Mode::Time(s) => self.elapsed(now) >= Duration::from_secs(s),
             Mode::Survival => self.fuel <= 0.0,
-            Mode::Pursuit if self.lead() <= 0.0 => {
-                self.busted = Some(now);
-                true
-            }
+            Mode::Pursuit => self.caught(now),
             _ => false,
         };
         if over {
@@ -416,11 +428,23 @@ impl Test {
         (self.typed.len() as f64 - self.cop).clamp(0.0, LEAD_MAX)
     }
 
+    /// Pursuit: the cop has reached the caret (and when, for BUSTED!).
+    fn caught(&mut self, now: Instant) -> bool {
+        let lead = self.lead();
+        // NaN too: a cop that broke the maths can't hide behind `<=`
+        let caught = self.mode == Mode::Pursuit && (lead <= 0.0 || lead.is_nan());
+        if caught {
+            self.busted = Some(now);
+        }
+        caught
+    }
+
     /// Pursuit: the cop's speed. Each step ramps it 4% plus 1% per start level.
     pub fn cop_wpm(&self) -> f64 {
         let start = self.start_level.max(1) as f64;
         let ramp = 0.04 + start / 100.0;
-        COP_WPM * COP_START_STEP.powf(start - 1.0) * (1.0 + ramp).powf(self.steps())
+        let wpm = COP_WPM * COP_START_STEP.powf(start - 1.0) * (1.0 + ramp).powf(self.steps());
+        wpm.min(COP_WPM_MAX)
     }
 
     fn cop_cps(&self) -> f64 {
@@ -647,11 +671,14 @@ mod tests {
             (3, 1, 0, 2)
         );
         assert_eq!((t.last_key, t.last_error), (Some(t1), Some(t1)));
+        assert!(t.stuck, "the caret waits for the right key");
         assert!(t.cop > 2.0 - LEAD_MAX, "the clock runs on a miss");
         t.backspace(t1);
         assert_eq!(t.typed.len(), 2, "backspace does nothing");
         assert!(t.erased.is_empty());
+        // the right key in the same batch (same instant) still frees it
         type_str(&mut t, " a", t1);
+        assert!(!t.stuck);
         assert_eq!(t.typed, ['a', 'b', ' ', 'a']);
         assert_eq!((t.keystrokes, t.errors, t.combo, t.words), (5, 1, 2, 1));
         assert!(!t.words_done[0].clean);
@@ -735,6 +762,48 @@ mod tests {
         assert!(t.cop_wpm() > 25.0, "it sped up while you stalled");
         t.type_char(t.target[5], now);
         assert_eq!(t.typed.len(), 5, "input ignored after busted");
+    }
+
+    #[test]
+    fn pursuit_busts_a_key_that_comes_too_late() {
+        let t0 = Instant::now();
+        for c in ['a', '#'] {
+            let mut t = Test::new(Mode::Pursuit, &["ab"; 100]);
+            let now = type_steady(&mut t, 5, 100, t0);
+            // the cop a tenth of a char behind: a key right away beats it...
+            t.cop = 4.9;
+            t.type_char(t.target[5], now + Duration::from_millis(10));
+            assert_eq!((t.typed.len(), t.finished), (6, None), "in time");
+            // ...one after it has driven past the caret (~2 chars a second) doesn't
+            t.cop = 5.9;
+            let before = (t.keystrokes, t.errors, t.combo, t.score);
+            let late = now + Duration::from_millis(500);
+            t.type_char(c, late);
+            assert_eq!((t.busted, t.finished), (Some(late), Some(late)));
+            assert_eq!(t.typed.len(), 6, "{c:?} came too late to land");
+            assert_eq!((t.keystrokes, t.errors, t.combo, t.score), before);
+        }
+    }
+
+    #[test]
+    fn pursuit_busts_cleanly_after_a_huge_gap() {
+        // a week asleep: the ramp alone would overflow the cop to inf (and a
+        // second update on the same instant to NaN)
+        let t0 = Instant::now();
+        let week = t0 + Duration::from_secs(7 * 24 * 3600);
+        for key_first in [true, false] {
+            let mut t = Test::new(Mode::Pursuit, &["ab"; 100]);
+            type_str(&mut t, "ab", t0);
+            if key_first {
+                t.type_char(' ', week);
+            }
+            t.tick(week);
+            t.tick(week);
+            assert_eq!((t.busted, t.finished), (Some(week), Some(week)));
+            assert!(t.cop.is_finite(), "cop at {}", t.cop);
+            assert_eq!((t.cop_wpm(), t.lead()), (COP_WPM_MAX, 0.0));
+            assert_eq!(t.typed.len(), 2);
+        }
     }
 
     #[test]

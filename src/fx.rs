@@ -753,7 +753,19 @@ pub const POLICE: Rgb = (60, 120, 255);
 pub const SIREN_RED: Rgb = (255, 40, 40);
 /// What's left of a letter the cop drove over.
 pub const TRACKS: &str = "═";
-pub const TRACKS_RGB: Rgb = (70, 72, 84);
+/// Tracks in the dark theme (2.3:1 on black) and on paper (3.2:1), both
+/// fainter than the untyped text.
+const TRACKS_RGB: Rgb = (70, 72, 84);
+const TRACKS_PAPER: Rgb = (136, 139, 150);
+
+/// How the tire tracks are drawn. On paper they sit on the page, so the
+/// repaint doesn't flip their gray to something too pale to see.
+pub fn tracks() -> Style {
+    match crate::theme::is_light() {
+        true => Style::new().fg(rgb(TRACKS_PAPER)).bg(crate::theme::page()),
+        false => Style::new().fg(rgb(TRACKS_RGB)),
+    }
+}
 
 /// The siren's wig-wag, as on the menu card: true while red is lit, three
 /// flashes a second each. Calm keeps both lit, so this is only the phase.
@@ -810,12 +822,13 @@ pub fn cop(buf: &mut Buffer, t: &Test, now: Instant, hood: (i32, u16), under: Ra
 
 /// Pursuit, the cop nearly on you: its lights wash in from the screen
 /// edges, `k` 0..1, red on one side and blue on the other, swapping sides
-/// with the siren (a steady split in calm).
+/// with the siren. Off in calm, like the vignette: its strength jumps with
+/// every key, and the lead gauge already turns red.
 pub fn siren_wash(buf: &mut Buffer, t: &Test, now: Instant, k: f64) {
-    if k <= 0.0 {
+    if k <= 0.0 || calm() {
         return;
     }
-    let swap = !calm() && !siren_red(t, now);
+    let swap = !siren_red(t, now);
     edges(buf, k, |left| match left != swap {
         true => (190, 0, 0),
         false => (20, 60, 210),
