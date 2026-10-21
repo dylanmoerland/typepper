@@ -13,7 +13,7 @@ use web_time::Instant;
 
 use crate::best::{self, Bests};
 use crate::engine::{Aim, LEVELS, Mode};
-use crate::fx::{Rgb, WHITE, blur, fire, hash, lerp, mix, page_rgb, rank_color};
+use crate::fx::{POLICE, Rgb, SIREN_RED, WHITE, blur, fire, hash, lerp, mix, page_rgb, rank_color};
 use crate::settings::{ROWS, Row, Settings};
 use crate::{pepper, theme, ui};
 
@@ -66,7 +66,7 @@ pub const MENU: [Group; 6] = [
         name: "HOT PURSUIT",
         blurb: "outrun the cops · a wrong key stops you cold",
         // police blue: stays blue (not teal like ZEN) when the light theme deepens it
-        color: (60, 120, 255),
+        color: POLICE,
         scene: pursuit,
         modes: &[Mode::Pursuit],
     },
@@ -1035,8 +1035,8 @@ fn lava(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
 /// HOT PURSUIT: a racer tearing along the road the cards stand on, a cop on
 /// its tail, the siren flashing red and blue off the lane dashes streaming by.
 fn pursuit(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
-    const RED: Rgb = (255, 40, 40);
-    const BLUE: Rgb = (60, 120, 255);
+    const RED: Rgb = SIREN_RED;
+    const BLUE: Rgb = POLICE;
     // side view, facing right: a cabin on a body on two wheels
     const CAR: [&str; 2] = [" ▄███▄▄ ", "▀█▀▀▀▀█▀"];
     let (left, right) = (area.left() as i32, area.right() as i32);

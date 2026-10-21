@@ -149,7 +149,7 @@ const MULT_STEPS: u32 = 3;
 pub const FUEL: f64 = 10.0;
 /// Survival: fuel each correct word adds.
 const REFILL: f64 = 1.5;
-/// Levels a leveled mode (survival, lava) can start from, Tetris-style.
+/// Levels a leveled mode (survival, lava, pursuit) can start from, Tetris-style.
 pub const LEVELS: [u32; 4] = [1, 4, 7, 10];
 /// Survival: words per level; each level drains this much faster.
 const LEVEL_WORDS: u32 = 10;
