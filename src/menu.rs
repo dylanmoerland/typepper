@@ -26,7 +26,7 @@ pub struct Group {
     modes: &'static [Mode],
 }
 
-pub const MENU: [Group; 5] = [
+pub const MENU: [Group; 6] = [
     Group {
         name: "SPRINT",
         blurb: "type the words, fast as you can",
@@ -62,6 +62,14 @@ pub const MENU: [Group; 5] = [
         scene: lava,
         modes: &[Mode::Lava(Aim::Lock), Mode::Lava(Aim::Free)],
     },
+    Group {
+        name: "HOT PURSUIT",
+        blurb: "outrun the cops · a wrong key stops you cold",
+        // police blue: stays blue (not teal like ZEN) when the light theme deepens it
+        color: (60, 120, 255),
+        scene: pursuit,
+        modes: &[Mode::Pursuit],
+    },
 ];
 
 pub fn group(m: Mode) -> &'static Group {
@@ -74,8 +82,9 @@ fn slot(m: Mode) -> usize {
         Mode::Words(_) => 0,
         Mode::Time(_) => 1,
         Mode::Zen => 2,
-        Mode::Survival | Mode::Pursuit => 3,
+        Mode::Survival => 3,
         Mode::Lava(_) => 4,
+        Mode::Pursuit => 5,
     }
 }
 
@@ -131,7 +140,7 @@ impl Menu {
             target: 1,
             from: 1.0,
             at: now,
-            len: [1, 1, 0, 0, 0],
+            len: [1, 1, 0, 0, 0, 0],
             start: [0; MENU.len()],
             chip: (0, None),
             pressed: None,
@@ -324,8 +333,9 @@ fn dim(buf: &mut Buffer, k: f64) {
     }
 }
 
-/// The starting-level picker over a leveled game (survival, lava), before
-/// its first key: Tetris-style, so experienced typers can skip the warm-up.
+/// The starting-level picker over a leveled game (survival, lava, pursuit),
+/// before its first key: Tetris-style, so experienced typers can skip the
+/// warm-up.
 pub struct Pick {
     pub choice: usize,
     /// The chip slides from here.
@@ -1022,6 +1032,57 @@ fn lava(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
     }
 }
 
+/// HOT PURSUIT: a racer tearing along the road the cards stand on, a cop on
+/// its tail, the siren flashing red and blue off the lane dashes streaming by.
+fn pursuit(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
+    const RED: Rgb = (255, 40, 40);
+    const BLUE: Rgb = (60, 120, 255);
+    // side view, facing right: a cabin on a body on two wheels
+    const CAR: [&str; 2] = [" ▄███▄▄ ", "▀█▀▀▀▀█▀"];
+    let (left, right) = (area.left() as i32, area.right() as i32);
+    // the chase drives the lane just under the cards (behind them, the side
+    // cards' blurred text would break the cars up)
+    let (top, lane) = (focus.top() as i32 - 1, focus.bottom() as i32);
+    // the racer laps the screen; the cop closes in and drops back, both gone
+    // off the edge (siren glow too) before the racer wraps around
+    let racer = left + ((secs * 34.0).rem_euclid(area.width as f64 + 60.0) - 30.0) as i32;
+    let cop = racer - 8 - (3.0 + 3.0 * (1.0 + (secs * 0.9).sin())) as i32;
+    // wig-wag: red, then blue, three flashes a second each
+    let red_on = (secs * 6.0) as i64 % 2 == 0;
+    let lit = if red_on { RED } else { BLUE };
+    // lane dashes on both edges of the road; near the cop they catch the siren
+    for y in [top, lane + 2] {
+        for x in left..right {
+            let u = x as f64 + secs * 40.0;
+            let dash = hash((u / 8.0) as u64, y as u64, 61);
+            if u % 8.0 >= 4.0 || !lane_on(dash, w) {
+                continue;
+            }
+            let near = (1.0 - (x - cop - 3).abs() as f64 / 12.0).max(0.0);
+            let c = mix((130, 130, 140), lit, near);
+            dab(buf, x, y, "━", c, (0.4 + 0.5 * near) * w);
+        }
+    }
+    for (x, color) in [(cop, BLUE), (racer, (255, 215, 0))] {
+        for (dy, row) in CAR.iter().enumerate() {
+            for (j, ch) in row.chars().enumerate().filter(|&(_, c)| c != ' ') {
+                let mut utf8 = [0; 4];
+                let sym = ch.encode_utf8(&mut utf8);
+                dab(buf, x + j as i32, lane + dy as i32, sym, color, 0.9 * w);
+            }
+        }
+    }
+    // the light bar on the cop's roof
+    for (j, color, on) in [
+        (2, RED, red_on),
+        (3, (150, 150, 150), false),
+        (4, BLUE, !red_on),
+    ] {
+        let k = if on { 1.0 } else { 0.3 };
+        dab(buf, cop + j, lane - 1, "▄", color, k * w);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1036,6 +1097,10 @@ mod tests {
         assert_eq!(
             wrapped_rows("feed the fuel · it drains faster every level", 22),
             3
+        );
+        assert_eq!(
+            wrapped_rows("outrun the cops · a wrong key stops you cold", 40),
+            2
         );
     }
 
@@ -1055,13 +1120,13 @@ mod tests {
         assert_eq!((m.sel(), m.mode()), (1, Mode::Time(30)));
         m.swipe(-1, t0);
         m.swipe(-1, t0);
-        assert_eq!(m.sel(), 4, "wraps past the first card");
+        assert_eq!(m.sel(), 5, "wraps past the first card");
+        m.length(1, t0);
+        assert_eq!(m.mode(), Mode::Pursuit, "single-length modes stay put");
+        m.swipe(-1, t0);
         assert_eq!(m.mode(), Mode::Lava(Aim::Lock));
         m.length(1, t0);
         assert_eq!(m.mode(), Mode::Lava(Aim::Free));
-        m.swipe(-1, t0);
-        m.length(1, t0);
-        assert_eq!(m.mode(), Mode::Survival, "single-length modes stay put");
         let done = t0 + Duration::from_secs(1);
         assert_eq!(m.scroll(done), -2.0);
         assert!(
@@ -1073,5 +1138,15 @@ mod tests {
         m.length(-1, done);
         assert_eq!(m.mode(), Mode::Words(10), "back on sprint, shortest");
         assert_eq!(label(m.mode()), "SPRINT 10w");
+    }
+
+    #[test]
+    fn every_mode_lands_on_its_own_card() {
+        for (i, g) in MENU.iter().enumerate() {
+            for &m in g.modes {
+                assert_eq!(slot(m), i, "{m}");
+            }
+        }
+        assert_eq!(label(Mode::Pursuit), "HOT PURSUIT");
     }
 }

@@ -404,7 +404,8 @@ impl Bot {
                 self.fixing = false;
             } else if rng.random_bool(self.typos) {
                 t.type_char('#', at);
-                self.fixing = true;
+                // pursuit: a miss stays put, so there's nothing to take back
+                self.fixing = t.mode != Mode::Pursuit;
             } else if let Some(&c) = t.target.get(t.typed.len()) {
                 t.type_char(c, at);
             }
@@ -434,5 +435,34 @@ impl Bot {
             (self.wpm + 8.0 * t.elapsed(at).as_secs_f64()).min((self.wpm + 140.0).min(200.0));
         let wpm = if self.tour { ramp } else { self.wpm };
         at + Duration::from_secs_f64(12.0 / wpm * rand::rng().random_range(0.7..1.3))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bot that fumbles its first key, then types on clean for one more.
+    fn fumble(mode: Mode) -> Test {
+        let t0 = Instant::now();
+        let mut t = Test::new(mode, &["ab"; 10]);
+        let mut bot = Bot {
+            next: t0,
+            typos: 1.0,
+            ..Bot::typist(60.0)
+        };
+        bot.drive(&mut t, t0);
+        bot.typos = 0.0;
+        bot.drive(&mut t, bot.next);
+        t
+    }
+
+    #[test]
+    fn the_bot_fixes_its_typos_except_in_pursuit() {
+        let t = fumble(Mode::Words(10));
+        assert_eq!((t.typed.len(), t.erased.len()), (0, 1), "took the # back");
+        let t = fumble(Mode::Pursuit);
+        assert_eq!(t.typed, ['a'], "the miss stayed put, then it went on");
+        assert_eq!((t.errors, t.erased.len()), (1, 0));
     }
 }
