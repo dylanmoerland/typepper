@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://typepper.com"><img alt="typepper — a spicy little typing game for your terminal and browser: sprint, blitz, zen, survival and floor is lava" src="assets/logo/og.png" width="720"></a>
+  <a href="https://typepper.com"><img alt="typepper — a spicy little typing game for your terminal and browser: sprint, blitz, zen, survival, floor is lava and hot pursuit" src="assets/logo/og.png" width="720"></a>
 </p>
 
 <p align="center">
@@ -30,13 +30,15 @@ Or build it yourself: `cargo install --git https://github.com/leodiegues/typeppe
 
 ## A look
 
-Five modes on a carousel: sprint, blitz, zen, survival and floor is lava.
+Six modes on a carousel: sprint, blitz, zen, survival, floor is lava and hot pursuit.
 
 <p align="center"><img alt="the mode carousel: cards blur toward the edges while each mode's scenery cross-fades in" src="assets/gifs/menu.gif" width="714"></p>
 
 **FLOOR IS LAVA:** type the falling words before they land; every one that does raises the lava.
 
 <p align="center"><img alt="FLOOR IS LAVA from level 10: words fall, one is locked onto and typed, missed words splash into rising lava until the run is cooked" src="assets/gifs/lava.gif" width="714"></p>
+
+**HOT PURSUIT:** a cop chases your caret down the text you've typed, leaving tire tracks; a wrong key stops you cold, and if the cop catches up you're busted.
 
 **Streaks:** the caret catches fire, fever turns the trail to embers, and a broken combo shatters.
 

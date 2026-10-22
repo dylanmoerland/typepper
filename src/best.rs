@@ -52,11 +52,7 @@ impl Bests {
 
     /// Score a finished test; a new best is kept (and saved). Zen has none.
     pub fn record(&mut self, t: &Test, now: Instant) -> Option<Outcome> {
-        let value = match t.mode {
-            Mode::Zen => return None,
-            m if m.leveled() => t.words as f64,
-            _ => t.wpm(now).round(),
-        };
+        let value = score(t, now)?;
         let out = Outcome {
             value,
             was: self.get(t.mode, t.start_level),
@@ -67,6 +63,16 @@ impl Bests {
             let _ = store::write("bests", &self.to_text());
         }
         Some(out)
+    }
+}
+
+/// What a finished test puts up against its best: words in the leveled
+/// modes, wpm in the rest, nothing in zen.
+fn score(t: &Test, now: Instant) -> Option<f64> {
+    match t.mode {
+        Mode::Zen => None,
+        m if m.leveled() => Some(t.words as f64),
+        _ => Some(t.wpm(now).round()),
     }
 }
 
@@ -105,6 +111,20 @@ mod tests {
             "unleveled modes ignore it"
         );
         assert_eq!(Bests::parse(&b.to_text()).0, b.0);
+    }
+
+    #[test]
+    fn pursuit_keeps_words_per_start_level() {
+        assert_eq!(key(Mode::Pursuit, 1), "HOT PURSUIT");
+        assert_eq!(key(Mode::Pursuit, 7), "HOT PURSUIT from lv7");
+        let b = Bests::parse("HOT PURSUIT from lv7=31\n");
+        assert_eq!(b.get(Mode::Pursuit, 7), Some(31.0));
+        assert_eq!(b.get(Mode::Pursuit, 1), None);
+        let t0 = Instant::now();
+        let mut t = Test::new(Mode::Pursuit, &["ab"; 100]);
+        "ab ab ab ".chars().for_each(|c| t.type_char(c, t0));
+        assert_eq!(score(&t, t0), Some(3.0), "words, not wpm");
+        assert_eq!(show(Mode::Pursuit, 3.0), "3 words");
     }
 
     #[test]
