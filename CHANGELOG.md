@@ -4,7 +4,7 @@ What changed in each typepper release, newest first.
 
 ## Unreleased
 
-- New mode, HOT PURSUIT: a cop chases your caret down the text you've typed and speeds up with every word and every second, so stay ahead or you're busted. A wrong key stops you until you type the right one. Start from level 1, 4, 7 or 10; bests are kept per starting level
+- New mode, HOT PURSUIT: a cop chases your caret down the text you've typed and speeds up with every word and every second, so stay ahead or you're busted. A wrong key stops you until you type the right one. Start from level 1, 4, 7 or 10; bests are kept per starting level (thanks @y0sif!)
 
 ## [0.2.0] - 2026-10-16
 
