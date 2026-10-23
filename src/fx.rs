@@ -216,7 +216,7 @@ pub fn crowd(buf: &mut Buffer, t: &Test, now: Instant, panel: Rect) {
     if want == 0 || panel.y < buf.area.y + 4 {
         return;
     }
-    let slots = (panel.width.saturating_sub(4) / 5) as usize; // 3 wide + 2 gap
+    let slots = slots(panel);
     let mut order: Vec<usize> = (0..slots).collect();
     order.sort_by_key(|&s| hash(s as u64, 3, 3)); // newcomers appear scattered
     let clock = anim_clock(t, now);
@@ -230,7 +230,11 @@ pub fn crowd(buf: &mut Buffer, t: &Test, now: Instant, panel: Rect) {
         _ => "•‿•",
     };
 
+    let disco = disco_secs(t, now);
     for &s in order.iter().take(want) {
+        if disco.is_some_and(|d| d >= tackled_at(panel, s)) {
+            continue; // `knocked` has it now
+        }
         let frac = (s as f64 + 0.5) / slots as f64;
         let in_wave = |secs: f64| (secs / WAVE - frac).abs() < 0.08;
         let phase = hash(s as u64, 5, 5) as f64 / 40.0;
@@ -244,7 +248,7 @@ pub fn crowd(buf: &mut Buffer, t: &Test, now: Instant, panel: Rect) {
             true => -1,
             false => 0,
         };
-        let x = panel.x as i32 + 2 + s as i32 * 5 + jitter;
+        let x = slot_x(panel, s) + jitter;
         let y = panel.y as i32 - 3 - i32::from(jump);
         put(
             buf,
@@ -264,6 +268,242 @@ pub fn crowd(buf: &mut Buffer, t: &Test, now: Instant, panel: Rect) {
         }
         for (c, ch) in ["▝", "█", "▘"].into_iter().enumerate() {
             put(buf, x + c as i32, y + 2, ch, Style::new().fg(body));
+        }
+    }
+}
+
+/// Crowd slots along the panel's top: 3 wide + 2 gap.
+fn slots(panel: Rect) -> usize {
+    (panel.width.saturating_sub(4) / 5) as usize
+}
+
+fn slot_x(panel: Rect, s: usize) -> i32 {
+    panel.x as i32 + 2 + s as i32 * 5
+}
+
+// ── disco ───────────────────────────────────────────────────────────────
+
+const DROP: f64 = 0.6; // seconds for the disco ball to lower, then the tackle
+const SLIDE: f64 = 36.0; // tackle speed, cells per second
+const MOONWALK: f64 = 7.5; // cells per second, backwards
+const SPIN: f64 = 1.2; // seconds of headspin at each end of the moonwalk
+const STRIDE: f64 = 6.0; // cells the feet scissor past each other per step
+const TACKLE: [&str; 2] = ["  ▄▄▄▄  ", "╾█>‿<██▙"]; // head first… toes at the right
+const FALLEN: [&str; 3] = ["▗█▖", "°o°", " ╯ "];
+const HEADSPIN: [[&str; 4]; 2] = [
+    [" ▄█▀ ", "▝███▘", "█■-■█", "  ╰  "],
+    [" ▀█▄ ", "▝███▘", "█■-■█", "  ╯  "],
+];
+
+/// Seconds since reaching reaper, where the disco takes over the crowd.
+fn disco_secs(t: &Test, now: Instant) -> Option<f64> {
+    (t.rank == REAPER && !calm()).then(|| since(t.rank_up, now).as_secs_f64())
+}
+
+/// Where the tackle starts and stops (the dancer's left column).
+fn slide_span(panel: Rect) -> (i32, i32) {
+    (panel.x as i32 - 8, panel.right() as i32 - 10)
+}
+
+/// When the tackle's toes reach crowd slot `s`.
+fn tackled_at(panel: Rect, s: usize) -> f64 {
+    let toes = slide_span(panel).0 + 7;
+    DROP + (slot_x(panel, s) + 1 - toes) as f64 / SLIDE
+}
+
+/// Tackled crowd peppers flip and drop away one by one, like a koopa hit by
+/// a shell. Drawn before the panel, so they fall behind it.
+pub fn knocked(buf: &mut Buffer, t: &Test, now: Instant, panel: Rect) {
+    let Some(d) = disco_secs(t, now) else { return };
+    if panel.y < buf.area.y + 4 {
+        return;
+    }
+    for s in 0..slots(panel) {
+        let age = d - tackled_at(panel, s);
+        if !(0.0..3.0).contains(&age) {
+            continue;
+        }
+        let x = slot_x(panel, s) + (age * 12.0) as i32;
+        let y = panel.y as i32 - 3 + (age * (25.0 * age - 14.0)).round() as i32;
+        sprite(buf, x, y, &FALLEN, pepper_body(t));
+    }
+}
+
+/// Reaper's disco: the ball lowers into `sky`, a break-dancer slide-tackles
+/// the crowd off the panel (see `knocked`), then moonwalks back and forth
+/// with a headspin at each end.
+pub fn disco(buf: &mut Buffer, t: &Test, now: Instant, panel: Rect, sky: Rect) {
+    let Some(d) = disco_secs(t, now) else { return };
+    if panel.y < buf.area.y + 5 {
+        return;
+    }
+    let clock = anim_clock(t, now);
+    let (from, to) = slide_span(panel);
+    // the dance floor: from where the tackle stops back to the middle
+    let right = to + 1;
+    let span = (right - (panel.x + panel.width / 2) as i32 + 2).max(0);
+    // the ball hangs over the dance floor, clear of the milestone slam
+    if sky.height >= 5 {
+        let drop = (1.0 - d / DROP).max(0.0);
+        let (cx, top) = (
+            right + 2 - span / 2,
+            sky.y as i32 + 1 - (drop * drop * 6.0) as i32,
+        );
+        for y in sky.y as i32..top {
+            put(buf, cx, y, "│", Style::new().fg(Color::Gray));
+        }
+        disco_ball(buf, cx, top, clock);
+        for i in 0..6 {
+            let a = i as f64 * PI / 3.0 + clock;
+            let twinkle = hash(i, 9, (clock * 5.0) as u64) < 128;
+            let y = top + 2 + (a.sin() * 3.0) as i32;
+            if y >= sky.bottom() as i32 {
+                continue; // that's the crowd's row
+            }
+            put(
+                buf,
+                cx + (a.cos() * 9.0) as i32,
+                y,
+                if twinkle { "✦" } else { "·" },
+                Style::new().fg(hsv(i as f64 * 60.0 + clock * 120.0, 0.6, 1.0)),
+            );
+        }
+    }
+    if d < DROP {
+        return;
+    }
+    let body = pepper_body(t);
+    let floor = panel.y as i32; // the dancer stands on the panel's top border
+    let x = from + (SLIDE * (d - DROP)) as i32;
+    if x < to {
+        sprite(buf, x, floor - 2, &TACKLE, body);
+        let dust = Style::new().fg(Color::Gray);
+        put(buf, x - 1, floor - 1, "∙", dust);
+        put(buf, x - 3, floor - 2, "·", dust);
+        return;
+    }
+    // ponytail: one routine on a loop; add freezes or a windmill if it gets stale
+    let walk = span as f64 / MOONWALK;
+    let p = (d - DROP - (to - from) as f64 / SLIDE) % (2.0 * (walk + SPIN));
+    let (x, glide) = match p {
+        p if p < walk => (right - (p * MOONWALK) as i32, Some((1, p))),
+        p if p < walk + SPIN => (right - span, None),
+        p if p < 2.0 * walk + SPIN => {
+            let g = p - walk - SPIN;
+            (right - span + (g * MOONWALK) as i32, Some((-1, g)))
+        }
+        _ => (right, None),
+    };
+    match glide {
+        Some((dir, g)) => moonwalker(buf, x, floor, dir, g, body),
+        None => sprite(
+            buf,
+            x,
+            floor - 4,
+            &HEADSPIN[(clock * 10.0) as usize % 2],
+            body,
+        ),
+    }
+    // a note floats up off the dancer every half second
+    let note = (clock * 2.0).fract();
+    put(
+        buf,
+        x + 4 + (note * 2.0) as i32,
+        floor - 7 - (note * 3.0) as i32,
+        ["♪", "♫"][(clock * 2.0) as usize % 2],
+        Style::new().fg(hsv(clock * 90.0, 0.6, 1.0)),
+    );
+}
+
+/// Facing `dir` (1 right, -1 left) while gliding the other way, `glide`
+/// seconds in, under a white fedora. Each step one foot stays planted on its
+/// toes, so it drifts forward against the body, while the other slides back
+/// flat past it; then they swap.
+fn moonwalker(buf: &mut Buffer, x: i32, floor: i32, dir: i32, glide: f64, body: Color) {
+    let white = Style::new().fg(Color::Rgb(240, 240, 240));
+    put_str(buf, x + 1, floor - 6, "▄█▄".chars(), white);
+    put_str(buf, x, floor - 5, "▀▀▀▀▀".chars(), white.bg(body));
+    let face = if dir > 0 {
+        "██■‿■"
+    } else {
+        "■‿■██"
+    };
+    sprite(buf, x, floor - 4, &[face], body);
+    let k = (glide * MOONWALK / STRIDE).fract() - 0.5; // -½ → ½ each step
+    let (straight, flat, toe) = match dir > 0 {
+        true => ("▌", "▙▄", "▚"),
+        false => ("▐", "▄▟", "▞"),
+    };
+    for (ahead, foot) in [(-k, flat), (k, toe)] {
+        // a long leg from the hip: thigh and shin slant out to the foot
+        let at = |reach: f64| x + (2.0 + dir as f64 * ahead * STRIDE * reach).round() as i32;
+        let mut prev = x + 2;
+        for (reach, y) in [(1.0 / 3.0, floor - 3), (2.0 / 3.0, floor - 2)] {
+            let c = at(reach);
+            let leg = match c - prev {
+                0 => straight,
+                d if d > 0 => "▚",
+                _ => "▞",
+            };
+            put(buf, c, y, leg, Style::new().fg(body));
+            prev = c;
+        }
+        // the heel sits under the shin, the toe points ahead
+        let heel = if dir > 0 {
+            0
+        } else {
+            foot.chars().count() as i32 - 1
+        };
+        put_str(buf, at(1.0) - heel, floor - 1, foot.chars(), white);
+    }
+}
+
+/// A mirror ball centered on `cx`, 9 wide and 4 rows (8 half-rows) tall:
+/// facets sweep past as it turns, a few catch colored light.
+fn disco_ball(buf: &mut Buffer, cx: i32, top: i32, clock: f64) {
+    for c in 0..9 {
+        let facet = |py: i32| {
+            let (dx, dy) = ((c - 4) as f64 / 4.6, (py as f64 - 3.5) / 4.0);
+            (dx * dx + dy * dy <= 1.0).then(|| {
+                let lit = (c as f64 + clock * 4.0).floor() as i64 + py as i64;
+                match hash(c as u64, py as u64, (clock * 6.0) as u64) {
+                    0..20 => hsv(clock * 200.0 + c as f64 * 40.0, 0.5, 1.0),
+                    _ if lit.rem_euclid(2) == 0 => Color::Rgb(235, 235, 245),
+                    _ => Color::Rgb(120, 120, 140),
+                }
+            })
+        };
+        for r in 0..4 {
+            let (x, y) = (cx - 4 + c, top + r);
+            match (facet(2 * r), facet(2 * r + 1)) {
+                (Some(a), Some(b)) => put(buf, x, y, "▀", Style::new().fg(a).bg(b)),
+                (Some(a), None) => put(buf, x, y, "▀", Style::new().fg(a)),
+                (None, Some(b)) => put(buf, x, y, "▄", Style::new().fg(b)),
+                (None, None) => {}
+            }
+        }
+    }
+}
+
+/// A pepper sprite: stem glyphs in green, the face on the body, the rest body.
+fn sprite(buf: &mut Buffer, x: i32, y: i32, rows: &[&str], body: Color) {
+    for (r, row) in rows.iter().enumerate() {
+        for (c, ch) in row.chars().enumerate() {
+            let style = match ch {
+                ' ' => continue,
+                '╮' | '╭' | '╯' | '╰' | '╾' => Style::new().fg(STEM),
+                '•' | '‿' | '°' | 'o' | '■' | '-' | '>' | '<' => {
+                    Style::new().black().bg(body).bold()
+                }
+                _ => Style::new().fg(body),
+            };
+            put(
+                buf,
+                x + c as i32,
+                y + r as i32,
+                ch.encode_utf8(&mut [0; 4]),
+                style,
+            );
         }
     }
 }
@@ -349,17 +589,7 @@ pub fn tumblers(buf: &mut Buffer, t: &Test, now: Instant, panel: Rect, help: Rec
         } else {
             floor - 3 - (bounce * room as f64) as i32
         };
-        for (r, row) in TUMBLER[(p * 14.0) as usize % 2].iter().enumerate() {
-            for (c, ch) in row.chars().enumerate() {
-                let style = match ch {
-                    ' ' => continue,
-                    '╮' | '╭' => Style::new().fg(STEM),
-                    '•' | '‿' | '°' | 'o' => Style::new().black().bg(body).bold(),
-                    _ => Style::new().fg(body),
-                };
-                put(buf, x + c as i32, top + r as i32, &ch.to_string(), style);
-            }
-        }
+        sprite(buf, x, top, &TUMBLER[(p * 14.0) as usize % 2], body);
         if room >= 0 && bounce < 0.15 {
             let dust = Style::new().fg(Color::Gray);
             put(buf, x - 1, floor, "∙", dust);
@@ -1018,5 +1248,44 @@ mod tests {
         let end = fresh(1.0);
         assert_eq!(end[(0, 0)].symbol(), " ", "gone by the end");
         assert_eq!(end[(0, 1)].symbol(), "n");
+    }
+
+    #[test]
+    fn reaper_dancer_tackles_the_crowd_one_by_one() {
+        let area = Rect::new(0, 0, 90, 30);
+        let (panel, sky) = (Rect::new(2, 12, 86, 18), Rect::new(2, 0, 86, 9));
+        let t0 = Instant::now();
+        let mut t = Test::new(Mode::Time(60), &["a"]);
+        t.rank = REAPER;
+        t.rank_up = Some(t0);
+        let draw = |d: f64| {
+            let mut buf = Buffer::empty(area);
+            let now = t0 + Duration::from_secs_f64(d);
+            knocked(&mut buf, &t, now, panel);
+            crowd(&mut buf, &t, now, panel);
+            disco(&mut buf, &t, now, panel, sky);
+            buf
+        };
+        let count = |buf: &Buffer, sym: &str| {
+            (area.left()..area.right())
+                .flat_map(|x| (area.top()..panel.y).map(move |y| (x, y)))
+                .filter(|&p| buf[p].symbol() == sym)
+                .count()
+        };
+        let crowd_of = |buf: &Buffer| count(buf, "^") / 2;
+        assert_eq!(
+            crowd_of(&draw(0.5)),
+            slots(panel),
+            "everyone's up before the tackle"
+        );
+        let mid = draw(1.6);
+        assert!(
+            (1..slots(panel)).contains(&crowd_of(&mid)),
+            "knocked one by one"
+        );
+        assert_eq!(count(&mid, ">"), 1, "the tackle is on");
+        let after = draw(4.0);
+        assert_eq!(crowd_of(&after), 0, "the stage is cleared");
+        assert!(count(&after, "■") >= 2, "the dancer takes it");
     }
 }

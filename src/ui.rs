@@ -61,6 +61,7 @@ pub fn draw(f: &mut Frame, t: &Test, outcome: Option<Outcome>) {
     .areas(col);
     fx::speed_lines(f.buffer_mut(), t, now);
     fx::flames(f.buffer_mut(), t, now);
+    fx::knocked(f.buffer_mut(), t, now, panel);
     let (text, combo) = typing(f, panel, help, t, now);
     fx::crowd(f.buffer_mut(), t, now, panel);
     // milestones slam into the space over the crowd
@@ -68,6 +69,7 @@ pub fn draw(f: &mut Frame, t: &Test, outcome: Option<Outcome>) {
         height: above.height.saturating_sub(3),
         ..above
     };
+    fx::disco(f.buffer_mut(), t, now, panel, sky);
     fx::slam(f.buffer_mut(), t, now, sky);
     fx::caret_flame(f.buffer_mut(), t, now, text.caret);
     fx::shatter(f.buffer_mut(), t, now, combo);
