@@ -356,6 +356,7 @@ fn practice(mode: Mode, start: u32) -> Screen {
 /// `--demo` / `?demo` is the full tour (40 → 180 wpm, it also swipes the menu,
 /// picks levels and restarts); `--autopilot [wpm]` only types, at `wpm`,
 /// leaving the menus to you, or to a recording script (see `demo/`).
+/// `--flawless` on either one never misses.
 pub struct Bot {
     next: Instant,
     fixing: bool,
@@ -389,6 +390,10 @@ impl Bot {
 
     fn touring(self) -> Self {
         Bot { tour: true, ..self }
+    }
+
+    pub fn flawless(self) -> Self {
+        Bot { typos: 0.0, ..self }
     }
 
     fn drive(&mut self, t: &mut Test, now: Instant) {

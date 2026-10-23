@@ -33,7 +33,9 @@ fn main() -> std::io::Result<()> {
         let wpm = args.get(i + 1).and_then(|w| w.parse().ok());
         Bot::typist(wpm.unwrap_or(120.0))
     });
-    let mut app = App::new(autopilot.or(flag("--demo").then(Bot::tour)));
+    let bot = autopilot.or(flag("--demo").then(Bot::tour));
+    // --flawless: the bot never misses, so a run stays at reaper to watch its effects
+    let mut app = App::new(bot.map(|b| if flag("--flawless") { b.flawless() } else { b }));
     // --fps N: frame cap. ~120 by default; recordings use less, since a
     // recording terminal can't draw full-screen flames that fast (see demo/)
     let fps: f64 = args
@@ -114,7 +116,7 @@ fn scripted(step: &str) -> Option<(f64, Key)> {
 }
 
 /// Browser entry: waits for the chosen web font, then starts the game.
-/// `?demo` in the URL turns on the autopilot.
+/// `?demo` in the URL turns on the autopilot (`?demo&flawless`: it never misses).
 #[cfg(target_arch = "wasm32")]
 fn main() {
     use wasm_bindgen_futures::JsFuture;
@@ -161,7 +163,15 @@ fn start(font: &'static str) -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|w| w.match_media("(pointer: coarse)").ok().flatten())
         .is_some_and(|m| m.matches());
     settings::set_touch(coarse || query.contains("touch"));
-    let app = Rc::new(RefCell::new(App::new(demo.then(Bot::tour))));
+    let bot = demo.then(Bot::tour);
+    let bot = bot.map(|b| {
+        if query.contains("flawless") {
+            b.flawless()
+        } else {
+            b
+        }
+    });
+    let app = Rc::new(RefCell::new(App::new(bot)));
 
     // dynamic atlas rasterizes any glyph (blocks, faces, sparks) from the font stack
     let system = ["Menlo", "Consolas", "DejaVu Sans Mono", "monospace"];
