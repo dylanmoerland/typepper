@@ -5,7 +5,7 @@
 mod imp {
     use std::path::PathBuf;
 
-    fn path(name: &str) -> Option<PathBuf> {
+    pub fn path(name: &str) -> Option<PathBuf> {
         let var = |k| std::env::var_os(k).map(PathBuf::from);
         let dir = var("XDG_DATA_HOME")
             .or_else(|| var("HOME").map(|h| h.join(".local/share")))
@@ -42,6 +42,8 @@ mod imp {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use imp::path;
 pub use imp::{read, write};
 
 /// Bytes, kept as hex (localStorage only holds text).

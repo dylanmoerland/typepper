@@ -3,6 +3,7 @@ mod best;
 mod fx;
 mod lava;
 mod menu;
+mod online;
 mod pepper;
 mod settings;
 mod store;
@@ -117,7 +118,12 @@ fn load_replay(path: Option<&String>) -> Result<(engine::Setup, engine::Replay),
         Some(p) => std::fs::read(p).map_err(|e| format!("{p}: {e}"))?,
         None => store::read_bytes("last.replay").ok_or("no round played yet")?,
     };
-    let replay = engine::Replay::decode(&bytes).map_err(|e| e.to_string())?;
+    checked(&bytes)
+}
+
+/// A replay these rules can play back.
+fn checked(bytes: &[u8]) -> Result<(engine::Setup, engine::Replay), String> {
+    let replay = engine::Replay::decode(bytes).map_err(|e| e.to_string())?;
     if replay.engine != engine::VERSION {
         return Err(format!(
             "it was recorded by other rules (engine {}, these are {})",
@@ -151,7 +157,8 @@ fn scripted(step: &str) -> Option<(f64, Key)> {
 }
 
 /// Browser entry: waits for the chosen web font, then starts the game.
-/// `?demo` in the URL turns on the autopilot (`?demo&flawless`: it never misses).
+/// `?demo` in the URL turns on the autopilot (`?demo&flawless`: it never misses);
+/// `?replay=<id>` plays a shared round first.
 #[cfg(target_arch = "wasm32")]
 fn main() {
     use wasm_bindgen_futures::JsFuture;
@@ -166,12 +173,35 @@ fn main() {
         {
             let _ = JsFuture::from(load).await;
         }
-        start(font).expect("typepper failed to start");
+        let watch = match shared_replay() {
+            Some(id) => online::fetch(&id)
+                .await
+                .and_then(|bytes| checked(&bytes))
+                .inspect_err(|why| ratzilla::web_sys::console::warn_1(&why.into()))
+                .ok(),
+            None => None,
+        };
+        start(font, watch).expect("typepper failed to start");
     });
 }
 
+/// `?replay=<id>`'s id, if it's one.
 #[cfg(target_arch = "wasm32")]
-fn start(font: &'static str) -> Result<(), Box<dyn std::error::Error>> {
+fn shared_replay() -> Option<String> {
+    let query = ratzilla::web_sys::window()?.location().search().ok()?;
+    let id = query
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("replay="))?;
+    // ids are 8 base62 characters: nothing else goes into a URL
+    (id.len() == 8 && id.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| id.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start(
+    font: &'static str,
+    watch: Option<(engine::Setup, engine::Replay)>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -206,7 +236,7 @@ fn start(font: &'static str) -> Result<(), Box<dyn std::error::Error>> {
             b
         }
     });
-    let app = Rc::new(RefCell::new(App::new(bot, None)));
+    let app = Rc::new(RefCell::new(App::new(bot, watch)));
 
     // dynamic atlas rasterizes any glyph (blocks, faces, sparks) from the font stack
     let system = ["Menlo", "Consolas", "DejaVu Sans Mono", "monospace"];

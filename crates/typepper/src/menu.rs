@@ -99,11 +99,7 @@ fn slot(m: Mode) -> usize {
 
 /// "BLITZ 30s", "ZEN".
 pub fn label(m: Mode) -> String {
-    let g = group(m);
-    match g.modes.len() {
-        1 => g.name.to_string(),
-        _ => format!("{} {m}", g.name),
-    }
+    m.name()
 }
 
 /// Esc can't close a browser tab, so the web title screen doesn't offer it.
@@ -291,6 +287,7 @@ pub fn dialog(f: &mut Frame, d: &Dialog, s: &Settings, now: Instant) {
             Row::Theme => "theme",
             Row::Effects => "effects",
             Row::Font => "font",
+            Row::Online => "online",
         };
         let line = Rect::new(inner.x + 2, y, inner.width.saturating_sub(4), 1);
         let label = if on {

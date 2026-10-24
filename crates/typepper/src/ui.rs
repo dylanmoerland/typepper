@@ -46,11 +46,12 @@ pub fn column(area: Rect) -> Rect {
 }
 
 /// Typing screen or its results.
-pub fn draw(f: &mut Frame, t: &Test, outcome: Option<Outcome>) {
+/// `share`: the results screen's word on sharing the round, if any.
+pub fn draw(f: &mut Frame, t: &Test, outcome: Option<Outcome>, share: Option<&str>) {
     let now = Instant::now();
     let col = column(f.area());
     if t.finished.is_some() {
-        return results(f, col, t, outcome, now);
+        return results(f, col, t, outcome, share, now);
     }
     let [above, panel, _, help] = Layout::vertical([
         Constraint::Fill(1),
@@ -520,7 +521,14 @@ const CARDS_AT: f64 = 0.25;
 const CHART_AT: f64 = 0.5;
 const BEST_AT: f64 = 0.85;
 
-fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: Instant) {
+fn results(
+    f: &mut Frame,
+    area: Rect,
+    t: &Test,
+    outcome: Option<Outcome>,
+    share: Option<&str>,
+    now: Instant,
+) {
     let [_, top, _, cards, _, chart, _, details, _, help] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(14), // 3D pepper + score
@@ -726,15 +734,15 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
         ),
     };
     f.render_widget(Line::from(line).dark_gray().centered(), details);
-    f.render_widget(
-        Line::from(match touch() {
-            true => "  tap to play again · ✕ menu  ",
-            false => "  tab/enter again · esc menu  ",
-        })
-        .dark_gray()
-        .centered(),
-        help,
-    );
+    let again = match touch() {
+        true => "tap to play again · ✕ menu",
+        false => "tab/enter again · esc menu",
+    };
+    let help_line = match share {
+        Some(share) => format!("  {share} · {again}  "),
+        None => format!("  {again}  "),
+    };
+    f.render_widget(Line::from(help_line).dark_gray().centered(), help);
 }
 
 /// "▄▄▄  BUSTED! · SCORE  ▄▄▄" between the cop's lights: BUSTED! lands

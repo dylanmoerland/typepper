@@ -42,13 +42,14 @@ pub enum Row {
     Theme,
     Effects,
     Font,
+    Online,
 }
 
 /// The dialog's rows; fonts only exist in the browser.
 pub const ROWS: &[Row] = if cfg!(target_arch = "wasm32") {
-    &[Row::Theme, Row::Effects, Row::Font]
+    &[Row::Theme, Row::Effects, Row::Font, Row::Online]
 } else {
-    &[Row::Theme, Row::Effects]
+    &[Row::Theme, Row::Effects, Row::Online]
 };
 
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
@@ -58,6 +59,8 @@ pub struct Settings {
     pub calm: bool,
     /// Index into `FONTS`.
     pub font: usize,
+    /// Off: no sharing, and no hint about it (the game never needs typepper.com).
+    pub offline: bool,
 }
 
 const THEMES: [Option<bool>; 3] = [None, Some(false), Some(true)];
@@ -75,6 +78,7 @@ impl Settings {
                 ("theme", "light") => s.light = Some(true),
                 ("effects", "calm") => s.calm = true,
                 ("font", f) => s.font = FONTS.iter().position(|&x| x == f).unwrap_or(0),
+                ("online", "off") => s.offline = true,
                 _ => {}
             }
         }
@@ -83,10 +87,11 @@ impl Settings {
 
     fn to_text(self) -> String {
         format!(
-            "theme={}\neffects={}\nfont={}\n",
+            "theme={}\neffects={}\nfont={}\nonline={}\n",
             self.value(Row::Theme),
             self.value(Row::Effects),
-            FONTS[self.font]
+            FONTS[self.font],
+            self.value(Row::Online)
         )
     }
 
@@ -111,6 +116,8 @@ impl Settings {
             Row::Effects if self.calm => "calm",
             Row::Effects => "full",
             Row::Font => FONTS[self.font],
+            Row::Online if self.offline => "off",
+            Row::Online => "on",
         }
     }
 
@@ -123,6 +130,7 @@ impl Settings {
             }
             Row::Effects => self.calm = !self.calm,
             Row::Font => self.font = step(self.font, FONTS.len()),
+            Row::Online => self.offline = !self.offline,
         }
     }
 }
@@ -139,13 +147,15 @@ mod tests {
         s.change(Row::Theme, 1);
         s.change(Row::Effects, 1);
         s.change(Row::Font, -1);
+        s.change(Row::Online, 1);
         assert_eq!(
             (
                 s.value(Row::Theme),
                 s.value(Row::Effects),
-                s.value(Row::Font)
+                s.value(Row::Font),
+                s.value(Row::Online)
             ),
-            ("light", "calm", "system")
+            ("light", "calm", "system", "off")
         );
         assert_eq!(Settings::parse(&s.to_text()), s);
         assert_eq!(
