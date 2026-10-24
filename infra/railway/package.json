@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "description": "typepper on Railway: infrastructure as code (railway.ts) and the Railway CLI, pinned",
+  "type": "module",
+  "devDependencies": {
+    "@railway/cli": "5.71.0",
+    "railway": "3.16.0"
+  }
+}

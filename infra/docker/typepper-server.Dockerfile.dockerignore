@@ -1,0 +1,11 @@
+# BuildKit reads this file for typepper-server.Dockerfile only
+.git
+target
+dist
+assets
+demo
+docs
+web
+**/node_modules
+# the image's tag pins Rust; this file would have rustup fetch wasm32 and friends
+rust-toolchain.toml

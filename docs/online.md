@@ -67,8 +67,9 @@ flowchart LR
   Railway never deploys on its own.
 - The deploy is detached: green CI means Railway accepted the upload. A failed
   build or health check leaves the previous deployment serving.
-- `--yes` without `--confirm-destructive`: an apply that would delete anything
-  (say, the hand-made TCP proxy) fails instead.
+- The TCP proxy is declared in `railway.ts` (`tcp: [2222]`), so applies keep
+  it. `--yes` without `--confirm-destructive`: an apply that would delete
+  anything (say, that proxy, whose port is in released games) fails instead.
 - Everything is pinned by hash: actions by commit SHA, base images by
   `@sha256`, the toolchain in `rust-toolchain.toml`, the Railway SDK and CLI by
   `package-lock.json`. Dependabot bumps them, and caches turn over only then.
@@ -79,8 +80,8 @@ flowchart LR
   renames wait for a later deploy, once nothing reads the old shape.
 
 One-time setup: a Railway project token as `RAILWAY_TOKEN` in a `production`
-GitHub environment, the TCP proxy (internal port 2222) made by hand, and
-`SSH_HOST_KEY` set in Railway.
+GitHub environment, `SSH_HOST_KEY` set in Railway, and the DNS records once
+Railway shows the domains and the TCP proxy's host and port.
 
 ## Repository layout
 
