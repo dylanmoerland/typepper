@@ -14,7 +14,8 @@ use crate::best::{Bests, Outcome};
 use crate::engine::{Game, Input, LEVELS, Mode, Replay, Round, Setup, Test};
 use crate::lava;
 use crate::menu::{self, Dialog, Menu, Pick};
-use crate::settings::{ROWS, Settings};
+use crate::online::{self, Upload};
+use crate::settings::{ROWS, Settings, touch};
 use crate::ui;
 
 pub enum Key {
@@ -36,6 +37,12 @@ enum Screen {
     Title,
     Play(Round),
     Watch(Watch),
+}
+
+/// Sharing the finished round: under way, or how it went (its link, or why not).
+enum Share {
+    Sending(Upload),
+    Done(Result<String, String>),
 }
 
 /// A replay playing back: its inputs land on a fresh round as their time comes.
@@ -83,6 +90,7 @@ pub struct App {
     /// The last frame drawn, and the one crumbling away since a screen change.
     frame: Option<Buffer>,
     fade: Option<(Buffer, Instant)>,
+    share: Option<Share>,
 }
 
 impl App {
@@ -116,6 +124,7 @@ impl App {
             bot,
             frame: None,
             fade: None,
+            share: None,
         }
     }
 
@@ -195,6 +204,19 @@ impl App {
             (Screen::Title, Key::Down) => self.menu.length(1, now),
             (Screen::Title, Key::Enter | Key::Char(' ')) => self.menu.press(now),
             (Screen::Title, _) => {}
+            // the results screen: u shares the round (unless the player's offline)
+            (Screen::Play(r), Key::Char('u'))
+                if r.test().finished.is_some()
+                    && !self.settings.offline
+                    && !matches!(self.share, Some(Share::Sending(_) | Share::Done(Ok(_)))) =>
+            {
+                let score = r.result().and_then(|o| o.score);
+                let body = online::submission(&Replay::of(r).encode(), score);
+                self.share = Some(match Upload::start(body) {
+                    Ok(up) => Share::Sending(up),
+                    Err(why) => Share::Done(Err(why)),
+                });
+            }
             (Screen::Play(r), key) => match key {
                 Key::Backspace => r.input(r.ms(now), Input::Backspace),
                 Key::Char(c) => r.input(r.ms(now), Input::Char(c)),
@@ -210,6 +232,11 @@ impl App {
     }
 
     pub fn tick(&mut self, now: Instant) {
+        if let Some(Share::Sending(up)) = &mut self.share
+            && let Some(done) = up.poll()
+        {
+            self.share = Some(Share::Done(done));
+        }
         let mut next = None;
         // demo: take the suggested starting level after a moment
         let touring = self.bot.as_ref().is_some_and(|b| b.tour);
@@ -300,7 +327,7 @@ impl App {
             }
             Screen::Play(r) | Screen::Watch(Watch { round: r, .. }) => match &r.game {
                 Game::Lava(l) if l.test.finished.is_none() => lava::draw(f, l, now),
-                _ => ui::draw(f, r.test(), self.outcome),
+                _ => ui::draw(f, r.test(), self.outcome, self.share_hint().as_deref()),
             },
         }
         if let (Some(p), Some(t)) = (&self.pick, self.screen.test()) {
@@ -328,7 +355,27 @@ impl App {
         }
     }
 
+    /// The results screen's word on sharing (none offline, on touch screens
+    /// with no u to press, or under someone else's replay).
+    fn share_hint(&self) -> Option<String> {
+        if self.settings.offline || touch() || !matches!(self.screen, Screen::Play(_)) {
+            return None;
+        }
+        let copied = if cfg!(target_arch = "wasm32") {
+            "copied"
+        } else {
+            "shared"
+        };
+        Some(match &self.share {
+            None => "u share".into(),
+            Some(Share::Sending(_)) => "sharing…".into(),
+            Some(Share::Done(Ok(link))) => format!("{copied}: {link}"),
+            Some(Share::Done(Err(why))) => format!("couldn't share: {why} · u again"),
+        })
+    }
+
     fn go(&mut self, screen: Screen, now: Instant) {
+        self.share = None;
         self.screen = screen;
         self.since = now;
         (self.outcome, self.scored) = (None, false);

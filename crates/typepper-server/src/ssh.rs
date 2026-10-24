@@ -1,14 +1,24 @@
-//! The SSH side: a command in, response lines and an exit status out.
+//! The SSH side: a command in (and its stdin), response lines and an exit
+//! status out. The game runs the system `ssh`, so nothing here prompts.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use russh::keys::{PrivateKey, PublicKey};
-use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Server, Session};
+use russh::keys::{HashAlg, PrivateKey, PublicKey};
+use russh::server::{Auth, ChannelOpenHandle, Handler, Msg, Response, Server, Session};
 use russh::{Channel, ChannelId};
+use sqlx::PgPool;
 
-pub async fn serve(key: PrivateKey, port: u16) -> std::io::Result<()> {
+use crate::runs::{self, Quota};
+
+pub async fn serve(
+    key: PrivateKey,
+    db: PgPool,
+    quota: Arc<Quota>,
+    port: u16,
+) -> std::io::Result<()> {
     let config = russh::server::Config {
         keys: vec![key],
         inactivity_timeout: Some(Duration::from_secs(30)),
@@ -17,16 +27,34 @@ pub async fn serve(key: PrivateKey, port: u16) -> std::io::Result<()> {
         auth_rejection_time_initial: Some(Duration::ZERO),
         ..Default::default()
     };
-    Door.run_on_address(Arc::new(config), ("::", port)).await
+    let mut door = Door {
+        db,
+        quota,
+        who: String::new(),
+        uploads: HashMap::new(),
+    };
+    door.run_on_address(Arc::new(config), ("::", port)).await
 }
 
+/// One connection.
 #[derive(Clone)]
-struct Door;
+struct Door {
+    db: PgPool,
+    quota: Arc<Quota>,
+    /// Whose quota this is: their key's fingerprint, else where they came from.
+    who: String,
+    /// `v1 submit` channels still reading their stdin.
+    uploads: HashMap<ChannelId, Vec<u8>>,
+}
 
 impl Server for Door {
     type Handler = Self;
-    fn new_client(&mut self, _: Option<SocketAddr>) -> Self {
-        Door
+    fn new_client(&mut self, addr: Option<SocketAddr>) -> Self {
+        Door {
+            who: addr.map_or("?".into(), |a| a.ip().to_string()),
+            uploads: HashMap::new(),
+            ..self.clone()
+        }
     }
 }
 
@@ -39,7 +67,18 @@ impl Handler for Door {
     }
 
     // any key gets in; linking a key to a player comes with `v1 link`
-    async fn auth_publickey(&mut self, _: &str, _: &PublicKey) -> Result<Auth, Self::Error> {
+    async fn auth_publickey(&mut self, _: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
+        self.who = key.fingerprint(HashAlg::Sha256).to_string();
+        Ok(Auth::Accept)
+    }
+
+    // no key at all: in anyway, with nothing asked (anonymous sharing)
+    async fn auth_keyboard_interactive<'a>(
+        &'a mut self,
+        _: &str,
+        _: &str,
+        _: Option<Response<'a>>,
+    ) -> Result<Auth, Self::Error> {
         Ok(Auth::Accept)
     }
 
@@ -59,8 +98,49 @@ impl Handler for Door {
         command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if command == b"v1 submit" {
+            // the submission comes on stdin; it's answered at its end
+            session.channel_success(channel)?;
+            self.uploads.insert(channel, Vec::new());
+            return Ok(());
+        }
         let (out, status) = run(command);
         reply(channel, out, status, session)
+    }
+
+    async fn data(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let Some(body) = self.uploads.get_mut(&channel) else {
+            return Ok(());
+        };
+        if body.len() + data.len() > runs::MAX_BODY {
+            self.uploads.remove(&channel);
+            let out = "err too-big that's more than a submission\n".into();
+            return reply(channel, out, 1, session);
+        }
+        body.extend_from_slice(data);
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let Some(body) = self.uploads.remove(&channel) else {
+            return Ok(());
+        };
+        if !self.quota.take(&self.who) {
+            let out = "err rate-limited try again in an hour\n".into();
+            return reply(channel, out, 1, session);
+        }
+        // anonymous until keys can be linked to players
+        let out = runs::submit(&self.db, None, &body).await;
+        reply(channel, out, 0, session)
     }
 
     // a plain `ssh ssh.typepper.com`: no shell here, say so instead of hanging

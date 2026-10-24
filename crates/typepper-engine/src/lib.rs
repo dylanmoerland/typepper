@@ -82,6 +82,23 @@ impl Mode {
         self.start_level().is_some()
     }
 
+    /// What players call it: `BLITZ 30s`, `FLOOR IS LAVA lock-on`,
+    /// `HOT PURSUIT`. Local bests are saved under these, so they stay put.
+    pub fn name(self) -> String {
+        let card = match self {
+            Mode::Words(_) => "SPRINT",
+            Mode::Time(_) => "BLITZ",
+            Mode::Zen => "ZEN",
+            Mode::Survival { .. } => "SURVIVAL",
+            Mode::Lava { .. } => "FLOOR IS LAVA",
+            Mode::Pursuit { .. } => "HOT PURSUIT",
+        };
+        match self {
+            Mode::Words(_) | Mode::Time(_) | Mode::Lava { .. } => format!("{card} {self}"),
+            _ => card.into(),
+        }
+    }
+
     /// Its stable name, for replays and the server's boards: `time:30`,
     /// `words:25`, `zen`, `survival:4`, `lava:lock:4`, `pursuit:7`. Never
     /// changes with menu labels (those are `best`'s keys).

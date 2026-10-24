@@ -393,25 +393,31 @@ Long-term rows: at most players × modes played × months, about 2 KB each.
 
 - **Recording:** every round appends `(ms, Input)` to a `Vec`. That's all that
   happens during play.
-- **Results screen, logged in:** save the round to the outbox, then send the
-  whole outbox in one `v1 submit`. `ok`, `old-engine`, `bad-replay` and
-  `too-big` delete the entry; anything else keeps it for the next results
-  screen. Never retried at startup.
-- **Results screen, logged out:** a quiet hint, `u: share`. Nothing is sent
-  unless it's pressed.
-- **Outbox:** hex text through `store` (`outbox/<engine>-<unix_ms>`, or
-  `typepper.outbox.*` in localStorage), newest 20 kept.
+- **Results screen:** a quiet hint, `u share` (not offline, not on touch
+  screens). `u` sends this round alone, anonymously; the line then says
+  `sharing…`, `shared: r.typepper.com/<id>` (the web copies the link: a canvas
+  has no text to select), or `couldn't share: <why> · u again`.
+- **Outbox (with accounts, phase 5):** once logged in, every finished round
+  goes into it and the whole outbox goes up in one `v1 submit`. `ok`,
+  `old-engine`, `bad-replay` and `too-big` delete the entry; anything else
+  keeps it for the next results screen. Never retried at startup. Hex text
+  through `store` (`outbox/<engine>-<unix_ms>`, or `typepper.outbox.*` in
+  localStorage), newest 20 kept.
 - **Desktop transport:** the system `ssh` as a child process, checked with
-  `try_wait()` each tick, never awaited:
-  `ssh -p PORT -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<shipped> ssh.typepper.com v1 submit`,
-  with stdin, stdout and stderr redirected so nothing touches the screen. The
-  game ships the server's host key; the server reads its private key from the
-  `TYPEPPER_SSH_HOST_KEY` variable, so it never changes between deploys. No `ssh` on
-  the machine: the hint is hidden.
+  `try_wait()` each tick, never awaited, killed after 20 s:
+  `ssh -T -p PORT -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o HostKeyAlias=typepper -o UserKnownHostsFile=<data dir>/known_hosts -o PubkeyAuthentication=no -o PasswordAuthentication=no ssh.typepper.com v1 submit`,
+  stdin, stdout and stderr redirected so nothing touches the screen. Never a
+  prompt: the host key is checked (the game ships it, from
+  `infra/ssh/typepper-server.pub`), and the server lets a client with no key
+  and no password in through keyboard-interactive with nothing asked (which
+  `BatchMode` would refuse). No key is offered while sharing is anonymous: an
+  agent could ask its owner to approve one. `TYPEPPER_SSH=host:port` and
+  `TYPEPPER_SSH_KNOWN_HOST` point it at a local server. No `ssh`: "ssh isn't
+  installed".
 - **Web transport:** `fetch` through `spawn_local`, landing in a slot `tick`
-  reads.
-- **Web replay mode:** `?replay=<id>` fetches `/v1/runs/{id}` and plays it
-  through `Round` and the usual `draw`.
+  reads. `?api=` points it at a local server.
+- **Web replay mode:** `?replay=<id>` fetches `/v1/runs/{id}` before the game
+  starts and plays it through `Round` and the usual `draw`.
 - An upload outlives the screen that started it (the handle lives on `App`).
 
 ## Phases
@@ -422,8 +428,8 @@ Long-term rows: at most players × modes played × months, about 2 KB each.
 | 1 | **Server skeleton on Railway**: `/health` (checks Postgres), ssh `ping`, Dockerfile, `infra/railway`, `deploy-production.yml`, pins, DNS, `TYPEPPER_SSH_HOST_KEY`. The first migration comes with the first table, in phase 4 | `curl api.typepper.com/health` and `ssh -p PORT ssh.typepper.com ping` answer | 0 |
 | 2 | **Engine crate**: Mode refactor, `Round`, seeded RNG, fixed timestep, `libm`, `VERSION` | a bot round played live and its log run through `simulate` give the same outcome | 0 (parallel with 1) |
 | 3 | **Replay format, recording, watching** (no network yet): `engine::replay`, `Mode::key`/`parse`, the last round saved as `last.replay`, `typepper --replay [FILE]` | golden-bytes, round-trip and junk tests pass; a round and its replay end on the same results screen | 2 |
-| 4 | **Share**: anonymous `v1 submit`, `/v1/runs/{id}`, share page, `online.rs`, the outbox, web replay mode | a terminal round becomes a link that plays back in a browser | 1, 3 |
-| 5 | **Identity**: OAuth, sessions, `v1 link`, CORS and cookies | a linked key and a web login map to the same player | 4 |
+| 4 | **Share**: anonymous `v1 submit` (SSH and HTTP), the `runs` table, `/v1/runs/{id}`, share page, `online.rs`, `u share`, web replay mode, the online setting | a terminal round becomes a link that plays back in a browser | 1, 3 |
+| 5 | **Identity**: OAuth, sessions, `v1 link`, cookies, the outbox | a linked key and a web login map to the same player | 4 |
 | 6 | **Leaderboards**: ranking in `submit`, boards, rank on the results screen, sweep | ranks show on the results screen; the sweep keeps exactly what boards need | 5 |
 
 ## Checks left behind

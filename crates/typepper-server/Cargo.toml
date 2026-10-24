@@ -17,7 +17,11 @@ release = false
 
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+rand = "0.10.3"
 russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa"] }
 serde_json = "1.0.154"
-sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio"] }
+# migrate: the migrations are compiled in (no database needed to build)
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "migrate", "macros"] }
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+tower-http = { version = "0.7.1", features = ["cors"] }
+typepper-engine = { path = "../typepper-engine" }
