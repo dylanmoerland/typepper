@@ -1,9 +1,8 @@
 {
   "private": true,
-  "description": "typepper on Railway: infrastructure as code (railway.ts) and the Railway CLI, pinned",
+  "description": "typepper on Railway: the IaC SDK railway.ts imports (the CLI comes from mise.toml)",
   "type": "module",
   "devDependencies": {
-    "@railway/cli": "5.71.0",
     "railway": "3.16.0"
   }
 }

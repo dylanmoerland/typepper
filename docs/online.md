@@ -53,7 +53,7 @@ protecting (around phase 5): a `ctx.environment` branch in `railway.ts`, a
 ```mermaid
 flowchart LR
   P["push to main<br/>(server, engine, Cargo.lock, infra/ changed)"] --> C["check: clippy + test"]
-  C --> D["deploy<br/>railway config apply --yes<br/>railway up --detach"]
+  C --> D["deploy<br/>mise run infra:apply -- --yes<br/>mise run infra:deploy"]
   D -. "uploads this commit,<br/>returns at once" .-> RB
   subgraph railway["Railway"]
     RB["builds infra/docker/typepper-server.Dockerfile"] --> HC{"/health ok?"}
@@ -71,17 +71,29 @@ flowchart LR
   it. `--yes` without `--confirm-destructive`: an apply that would delete
   anything (say, that proxy, whose port is in released games) fails instead.
 - Everything is pinned by hash: actions by commit SHA, base images by
-  `@sha256`, the toolchain in `rust-toolchain.toml`, the Railway SDK and CLI by
-  `package-lock.json`. Dependabot bumps them, and caches turn over only then.
+  `@sha256`, the toolchain in `rust-toolchain.toml`, the Railway CLI, Trunk,
+  dist and cargo-release in `mise.toml` / `mise.lock` (checksums per platform),
+  the Railway SDK in `package-lock.json`. Dependabot bumps actions, images and
+  npm; mise tools are bumped by hand. Caches turn over only when a pin moves.
 - Caching: rust-cache keyed by toolchain + `Cargo.lock`, saved from `main`
-  only; npm cache for `infra/railway`; cargo-chef keeps the dependency layer on
-  Railway's builder until `Cargo.lock` changes.
+  only; mise-action caches the tools, keyed by `mise.toml` / `mise.lock`;
+  cargo-chef keeps the dependency layer on Railway's builder until
+  `Cargo.lock` changes.
+- Locally, the same through mise: `mise run infra:plan` (read-only),
+  `infra:apply`, `infra:deploy`, and `mise run server` against a docker
+  Postgres. Every `infra:*` task first checks this folder is linked to
+  typepper's project (`TYPEPPER_RAILWAY_PROJECT` in `mise.toml`): an apply
+  deletes whatever `railway.ts` doesn't name, in whichever project it hits.
+- Railway IaC can't register custom domains: `api.` and `r.typepper.com` are
+  added in the dashboard, then listed in `railway.ts` so applies keep them.
 - **Migrations only add** (tables, nullable or defaulted columns). Drops and
   renames wait for a later deploy, once nothing reads the old shape.
 
-One-time setup: a Railway project token as `RAILWAY_TOKEN` in the `Production`
-GitHub environment, `SSH_HOST_KEY` set in Railway, and the DNS records once
-Railway shows the domains and the TCP proxy's host and port.
+One-time setup: `railway link -w Typepper -p <TYPEPPER_RAILWAY_PROJECT> -e
+production` in the repo, a Railway project token as `RAILWAY_TOKEN` in the
+`Production` GitHub environment, `SSH_HOST_KEY` set in Railway, the two custom
+domains in the dashboard, and the DNS records once Railway shows their targets
+and the TCP proxy's host and port.
 
 ## Repository layout
 
@@ -105,13 +117,14 @@ crates/
         ├── runs.rs           # submit, store, verify, fetch, share page, sweep
         └── board.rs          # day / week / month / year / all-time boards
 infra/
-├── railway/                  # Railway IaC (the `railway` npm SDK) + the pinned Railway CLI
-│   ├── package.json
-│   └── railway.ts            # project, service, Postgres, domains, variables
+├── railway/                  # Railway IaC; the CLI comes from mise
+│   ├── package.json          # the `railway` SDK railway.ts imports
+│   └── railway.ts            # service, Postgres, TCP proxy, variables
 └── docker/
     ├── typepper-server.Dockerfile             # pinned bases (@sha256), cargo-chef, multi-stage
     └── typepper-server.Dockerfile.dockerignore
 rust-toolchain.toml           # pinned toolchain: stable cache keys, no surprise upgrades
+mise.toml, mise.lock          # pinned tools (railway, trunk, dist, cargo-release, node) + tasks
 .github/
 ├── dependabot.yml            # bumps action SHAs, image digests, npm pins
 └── workflows/deploy-production.yml
