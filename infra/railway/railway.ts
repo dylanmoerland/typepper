@@ -14,9 +14,13 @@ export default defineRailway(() => {
     },
     // traffic moves to a new deploy only once this answers 200 (it checks Postgres)
     healthcheck: "/health",
-    // api.typepper.com and r.typepper.com (port 8080): IaC can't register custom
-    // domains. Add them in the dashboard, then list them here as
-    // `domains: [{ domain: "api.typepper.com", port: 8080 }, ...]` so applies keep them.
+    // IaC can't register custom domains: they were added with
+    // `railway domain <name> -p 8080 -s typepper-server`, and are listed here so
+    // applies keep them
+    domains: [
+      { domain: "api.typepper.com", port: 8080 },
+      { domain: "r.typepper.com", port: 8080 },
+    ],
     // ssh.typepper.com: Railway picks the public port, and released games keep
     // it, so this proxy must never be removed
     tcp: [2222],
