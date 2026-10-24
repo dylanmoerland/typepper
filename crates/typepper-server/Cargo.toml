@@ -25,3 +25,5 @@ sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "r
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
 tower-http = { version = "0.7.1", features = ["cors"] }
 typepper-engine = { path = "../typepper-engine" }
+# asks GitHub for a linking player's keys; rustls on ring, its own CA roots
+ureq = { version = "3.5.0", default-features = false, features = ["rustls"] }
