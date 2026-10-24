@@ -41,7 +41,7 @@ jobs:
   deploy:
     needs: check
     runs-on: ubuntu-latest
-    environment: production
+    environment: Production
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY: infra/railway/node_modules/.bin/railway

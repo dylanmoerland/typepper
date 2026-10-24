@@ -79,7 +79,7 @@ flowchart LR
 - **Migrations only add** (tables, nullable or defaulted columns). Drops and
   renames wait for a later deploy, once nothing reads the old shape.
 
-One-time setup: a Railway project token as `RAILWAY_TOKEN` in a `production`
+One-time setup: a Railway project token as `RAILWAY_TOKEN` in the `Production`
 GitHub environment, `SSH_HOST_KEY` set in Railway, and the DNS records once
 Railway shows the domains and the TCP proxy's host and port.
 
