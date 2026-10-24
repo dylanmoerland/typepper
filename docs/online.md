@@ -50,12 +50,12 @@ delete the proxy, or released builds lose their address.
 Cargo.toml                    # virtual workspace, default-members = ["crates/typepper"]
 crates/
 ├── typepper/                 # the game: ratatui UI, recording, outbox, online.rs
-├── engine/                   # typepper-engine: pure rules, no IO, no ratatui
+├── typepper-engine/          # pure rules, no IO, no ratatui
 │   └── src/
 │       ├── lib.rs            # VERSION, Mode, Setup, Input, Round, simulate()
 │       ├── test.rs, lava.rs  # today's engine.rs / lava.rs rules
 │       └── replay.rs         # bytes format v1; imports nothing else from the engine
-└── server/                   # typepper-server (dist = false, not released)
+└── typepper-server/          # (dist = false, not released)
     ├── Dockerfile
     ├── migrations/0001_init.sql
     └── src/
