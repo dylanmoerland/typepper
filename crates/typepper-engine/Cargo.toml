@@ -1,0 +1,20 @@
+[package]
+name = "typepper-engine"
+version.workspace = true
+edition.workspace = true
+description = "typepper's rules: the same round on the player's machine, in the browser and on the server"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[package.metadata.release]
+release = false
+
+[dependencies]
+# the same results on every platform: exp, pow and log from one Rust libm, not the OS's
+libm = "0.2.16"
+web-time = "1.1.0"

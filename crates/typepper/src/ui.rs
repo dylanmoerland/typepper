@@ -87,7 +87,7 @@ pub fn draw(f: &mut Frame, t: &Test, outcome: Option<Outcome>) {
     }
     // pursuit, under 2s from a bust: the siren lights up the edges
     let bust = fx::bust_in(t);
-    if t.mode == Mode::Pursuit && t.started.is_some() && bust < 2.0 {
+    if matches!(t.mode, Mode::Pursuit { .. }) && t.started.is_some() && bust < 2.0 {
         let beat = fx::siren_beat(t, now);
         fx::siren_wash(
             f.buffer_mut(),
@@ -129,7 +129,7 @@ impl TextGeom {
     /// before the text starts, it waits by the top row's left edge, out past
     /// the border but no further left than `lo`, and drives in as it closes.
     fn cop_at(&self, t: &Test, lo: u16) -> Option<(i32, u16)> {
-        if t.mode != Mode::Pursuit {
+        if !matches!(t.mode, Mode::Pursuit { .. }) {
             return None;
         }
         let hood = t.cop.floor() as i64 - 1;
@@ -192,9 +192,9 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
             Mode::Words(n) => {
                 format!("{}/{n}", t.typed.iter().filter(|c| **c == ' ').count()).yellow()
             }
-            Mode::Zen | Mode::Lava(_) => format!("{} words", t.words).yellow(),
-            Mode::Survival => fuel_gauge(t, fx::fuel_beat(t, now)),
-            Mode::Pursuit => lead_gauge(t, fx::siren_beat(t, now)),
+            Mode::Zen | Mode::Lava { .. } => format!("{} words", t.words).yellow(),
+            Mode::Survival { .. } => fuel_gauge(t, fx::fuel_beat(t, now)),
+            Mode::Pursuit { .. } => lead_gauge(t, fx::siren_beat(t, now)),
         };
         let stats = Line::from(vec![
             progress.bold(),
@@ -433,7 +433,7 @@ fn visible(t: &Test, width: usize) -> (Vec<(usize, usize)>, usize) {
 
 /// Pursuit: the cop has driven over target index `i`.
 fn eaten(t: &Test, i: usize) -> bool {
-    t.mode == Mode::Pursuit && (i as f64) < t.cop.floor()
+    matches!(t.mode, Mode::Pursuit { .. }) && (i as f64) < t.cop.floor()
 }
 
 fn letter(t: &Test, i: usize, clock: f64) -> Style {
@@ -698,12 +698,12 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     f.render_widget(chart_widget, chart);
 
     let mode = match t.mode {
-        m if m.leveled() && t.start_level > 1 => {
+        m if m.leveled() && t.start_level() > 1 => {
             format!(
                 "{} lv{} (from lv{})",
                 menu::label(m),
                 t.level(),
-                t.start_level
+                t.start_level()
             )
         }
         m if m.leveled() => format!("{} lv{}", menu::label(m), t.level()),
@@ -712,7 +712,7 @@ fn results(f: &mut Frame, area: Rect, t: &Test, outcome: Option<Outcome>, now: I
     let line = match (narrow, t.mode) {
         (true, _) => format!("{mode} · {took:.1}s · {} slips", t.errors),
         // pursuit: wrong keys never land, they're all slips
-        (false, Mode::Pursuit) => format!(
+        (false, Mode::Pursuit { .. }) => format!(
             "{mode} · {took:.1}s · {} correct · {} slips",
             t.correct(),
             t.errors
@@ -826,7 +826,7 @@ mod tests {
         for w in [40, 80] {
             for caret in [0, 3, 12, 25, 40, 50, 61] {
                 for lead in [LEAD_MAX, 20.0, 6.5, 1.0, 0.2] {
-                    let mut t = Test::new(Mode::Pursuit, &words);
+                    let mut t = Test::new(Mode::Pursuit { start_level: 1 }, &words);
                     t.typed = t.target[..caret].to_vec();
                     t.started = Some(now);
                     t.cop = caret as f64 - lead;

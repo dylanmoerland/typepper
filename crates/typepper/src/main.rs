@@ -1,6 +1,5 @@
 mod app;
 mod best;
-mod engine;
 mod fx;
 mod lava;
 mod menu;
@@ -11,6 +10,8 @@ mod theme;
 mod ui;
 
 use app::{App, Bot, Key};
+// the rules live in their own crate, shared with the server
+use typepper_engine as engine;
 use web_time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]

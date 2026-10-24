@@ -173,13 +173,14 @@ impl Round {
     fn advance(&mut self, to_ms: u32);              // fixed timestep
     fn result(&self) -> Option<Outcome>;
 }
-pub fn simulate(replay: &Replay) -> Option<Outcome>;
+pub fn simulate(setup: Setup, inputs: &[(u32, Input)]) -> Option<Outcome>;
 ```
 
 The live game, the bot, the web player and the server all drive `Round` the
 same way, so a replay reproduces the run exactly. What makes that hold:
 
-- one seeded RNG per round (word picks, mid-run refills, lava spawns)
+- one seeded RNG per round (word picks, mid-run refills, lava spawns):
+  SplitMix64 written out in `rng.rs`, not a crate whose algorithm could change
 - a fixed timestep: ticks come from the clock, they're never recorded
 - times in whole milliseconds from the start of the round
 - `libm` for `exp` / `powf` / `ln`, so macOS, Linux and wasm agree to the bit

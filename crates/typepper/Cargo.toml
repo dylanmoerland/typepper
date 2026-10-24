@@ -9,6 +9,7 @@ homepage.workspace = true
 
 [dependencies]
 rand = "0.10.3"
+typepper-engine = { path = "../typepper-engine" }
 ratatui = { version = "0.30.2", default-features = false, features = ["std", "layout-cache"] }
 web-time = "1.1.0"
 
