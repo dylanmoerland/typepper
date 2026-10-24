@@ -359,6 +359,47 @@ mod tests {
         }
     }
 
+    /// Recorded on macOS; CI checks them on Linux (and the web player, in
+    /// wasm). They pin the rules too: if one moves, results changed, so
+    /// `VERSION` goes up and these get re-recorded.
+    #[test]
+    fn same_numbers_on_every_platform() {
+        let golden = [
+            (
+                Mode::Time(15),
+                11,
+                (Some(69.0), 14, 15541, 0x4040_4bf3_d145_8dda, 3060, 92),
+            ),
+            (
+                Mode::Survival { start_level: 4 },
+                12,
+                (Some(25.0), 25, 26941, 0x4024_05f4_d531_0a70, 9760, 150),
+            ),
+            (
+                Mode::Lava {
+                    aim: Aim::Lock,
+                    start_level: 1,
+                },
+                13,
+                (Some(125.0), 125, 181116, 0x3ff1_7103_801a_1697, 10680, 1135),
+            ),
+        ];
+        assert_eq!(VERSION, 1, "new rules: re-record the numbers below");
+        for (mode, seed, want) in golden {
+            let r = play(mode, seed, &[16]);
+            let (o, t) = (r.result().unwrap(), r.test());
+            let got = (
+                o.score,
+                o.words,
+                o.ms,
+                t.heat.to_bits(),
+                t.score,
+                r.log.len(),
+            );
+            assert_eq!(got, want, "{mode:?}, seed {seed}");
+        }
+    }
+
     #[test]
     fn the_seed_picks_the_words() {
         let words = |seed| {
