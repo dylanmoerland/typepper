@@ -56,6 +56,6 @@ docker start typepper-pg >/dev/null 2>&1 ||
 key="${TMPDIR:-/tmp}/typepper-host-key"
 [ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -f "$key"
 echo "http://localhost:8080/health · ssh -p 2222 localhost ping"
-SSH_HOST_KEY="$(cat "$key")" DATABASE_URL=postgres://postgres:typepper@localhost:55432/postgres \
+TYPEPPER_SSH_HOST_KEY="$(cat "$key")" TYPEPPER_DATABASE_URL=postgres://postgres:typepper@localhost:55432/postgres \
   cargo run -p typepper-server
 '''

@@ -20,13 +20,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // whether it answers
     let db = sqlx::postgres::PgPoolOptions::new()
         .acquire_timeout(Duration::from_secs(3))
-        .connect_lazy(&var("DATABASE_URL")?)?;
+        .connect_lazy(&var("TYPEPPER_DATABASE_URL")?)?;
     // a fixed key from the environment: a new one per deploy would make every
     // player's ssh refuse the server (the game ships the public half)
-    let host_key = russh::keys::PrivateKey::from_openssh(var("SSH_HOST_KEY")?)?;
+    let host_key = russh::keys::PrivateKey::from_openssh(var("TYPEPPER_SSH_HOST_KEY")?)?;
     tokio::try_join!(
         http::serve(db, port("PORT", 8080)),
-        ssh::serve(host_key, port("SSH_PORT", 2222)),
+        ssh::serve(host_key, port("TYPEPPER_SSH_PORT", 2222)),
     )?;
     Ok(())
 }

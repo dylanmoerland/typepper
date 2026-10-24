@@ -91,7 +91,7 @@ flowchart LR
 
 One-time setup: `railway link -w Typepper -p <TYPEPPER_RAILWAY_PROJECT> -e
 production` in the repo, a Railway project token as `RAILWAY_TOKEN` in the
-`Production` GitHub environment, `SSH_HOST_KEY` set in Railway, the two custom
+`Production` GitHub environment, `TYPEPPER_SSH_HOST_KEY` set in Railway, the two custom
 domains in the dashboard, and the DNS records once Railway shows their targets
 and the TCP proxy's host and port.
 
@@ -405,7 +405,7 @@ Long-term rows: at most players × modes played × months, about 2 KB each.
   `ssh -p PORT -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<shipped> ssh.typepper.com v1 submit`,
   with stdin, stdout and stderr redirected so nothing touches the screen. The
   game ships the server's host key; the server reads its private key from the
-  `SSH_HOST_KEY` variable, so it never changes between deploys. No `ssh` on
+  `TYPEPPER_SSH_HOST_KEY` variable, so it never changes between deploys. No `ssh` on
   the machine: the hint is hidden.
 - **Web transport:** `fetch` through `spawn_local`, landing in a slot `tick`
   reads.
@@ -418,7 +418,7 @@ Long-term rows: at most players × modes played × months, about 2 KB each.
 | # | Phase | Done when | Needs |
 |---|---|---|---|
 | 0 | **Move into `crates/`**: Trunk, cargo-release, dist, CI, README, release skill | `cargo test`, both clippies and `trunk build` pass; `dist plan` and `cargo release` dry-run match today | — |
-| 1 | **Server skeleton on Railway**: `/health` (checks Postgres), ssh `ping`, Dockerfile, `infra/railway`, `deploy-production.yml`, pins, DNS, `SSH_HOST_KEY`. The first migration comes with the first table, in phase 4 | `curl api.typepper.com/health` and `ssh -p PORT ssh.typepper.com ping` answer | 0 |
+| 1 | **Server skeleton on Railway**: `/health` (checks Postgres), ssh `ping`, Dockerfile, `infra/railway`, `deploy-production.yml`, pins, DNS, `TYPEPPER_SSH_HOST_KEY`. The first migration comes with the first table, in phase 4 | `curl api.typepper.com/health` and `ssh -p PORT ssh.typepper.com ping` answer | 0 |
 | 2 | **Engine crate**: Mode refactor, `Round`, seeded RNG, fixed timestep, `libm`, `VERSION` | a bot round played live and its log run through `simulate` give the same outcome | 0 (parallel with 1) |
 | 3 | **Replay format, recording, outbox** (no network yet) | golden-bytes, round-trip and junk tests pass; the outbox fills offline | 2 |
 | 4 | **Share**: anonymous `v1 submit`, `/v1/runs/{id}`, share page, `online.rs`, web replay mode | a terminal round becomes a link that plays back in a browser | 1, 3 |
