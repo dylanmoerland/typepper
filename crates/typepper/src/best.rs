@@ -3,9 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use web_time::Instant;
-
-use crate::engine::{Mode, Test};
+use crate::engine::{self, Mode};
 use crate::menu::label;
 use crate::store;
 
@@ -45,20 +43,20 @@ impl Bests {
         self.0.iter().map(|(k, v)| format!("{k}={v}\n")).collect()
     }
 
-    /// The best for `m`, started from level `start` (1 for unleveled modes).
-    pub fn get(&self, m: Mode, start: u32) -> Option<f64> {
-        self.0.get(&key(m, start)).copied()
+    /// The best for `m` (from its starting level, in leveled modes).
+    pub fn get(&self, m: Mode) -> Option<f64> {
+        self.0.get(&key(m)).copied()
     }
 
-    /// Score a finished test; a new best is kept (and saved). Zen has none.
-    pub fn record(&mut self, t: &Test, now: Instant) -> Option<Outcome> {
-        let value = score(t, now)?;
+    /// Score a finished round; a new best is kept (and saved). Zen has none.
+    pub fn record(&mut self, m: Mode, round: &engine::Outcome) -> Option<Outcome> {
+        let value = round.score?;
         let out = Outcome {
             value,
-            was: self.get(t.mode, t.start_level),
+            was: self.get(m),
         };
         if out.is_new() {
-            self.0.insert(key(t.mode, t.start_level), value);
+            self.0.insert(key(m), value);
             // ponytail: a failed save only loses this best; no error UI for it
             let _ = store::write("bests", &self.to_text());
         }
@@ -66,22 +64,12 @@ impl Bests {
     }
 }
 
-/// What a finished test puts up against its best: words in the leveled
-/// modes, wpm in the rest, nothing in zen.
-fn score(t: &Test, now: Instant) -> Option<f64> {
-    match t.mode {
-        Mode::Zen => None,
-        m if m.leveled() => Some(t.words as f64),
-        _ => Some(t.wpm(now).round()),
-    }
-}
-
 /// Bests are kept per mode, and per starting level when it isn't 1 (so a
 /// run from level 10 isn't compared with one from level 1, and the keys
 /// saved before levels existed still mean level 1).
-fn key(m: Mode, start: u32) -> String {
-    match start {
-        2.. if m.leveled() => format!("{} from lv{start}", label(m)),
+fn key(m: Mode) -> String {
+    match m.start_level() {
+        Some(start @ 2..) => format!("{} from lv{start}", label(m)),
         _ => label(m),
     }
 }
@@ -98,33 +86,27 @@ pub fn show(m: Mode, v: f64) -> String {
 mod tests {
     use super::*;
 
+    const SURVIVAL_4: Mode = Mode::Survival { start_level: 4 };
+
     #[test]
     fn parses_what_it_writes_and_skips_junk() {
         let b = Bests::parse("BLITZ 30s=87\njunk\nSURVIVAL=nope\nSPRINT 10w=102.5\n");
-        assert_eq!(b.get(Mode::Time(30), 1), Some(87.0));
-        assert_eq!(b.get(Mode::Words(10), 1), Some(102.5));
-        assert_eq!(b.get(Mode::Survival, 1), None);
-        assert_eq!(key(Mode::Survival, 4), "SURVIVAL from lv4");
-        assert_eq!(
-            key(Mode::Time(30), 4),
-            "BLITZ 30s",
-            "unleveled modes ignore it"
-        );
+        assert_eq!(b.get(Mode::Time(30)), Some(87.0));
+        assert_eq!(b.get(Mode::Words(10)), Some(102.5));
+        assert_eq!(b.get(Mode::Survival { start_level: 1 }), None);
+        assert_eq!(key(SURVIVAL_4), "SURVIVAL from lv4");
         assert_eq!(Bests::parse(&b.to_text()).0, b.0);
     }
 
     #[test]
     fn pursuit_keeps_words_per_start_level() {
-        assert_eq!(key(Mode::Pursuit, 1), "HOT PURSUIT");
-        assert_eq!(key(Mode::Pursuit, 7), "HOT PURSUIT from lv7");
+        let from = |start_level| Mode::Pursuit { start_level };
+        assert_eq!(key(from(1)), "HOT PURSUIT");
+        assert_eq!(key(from(7)), "HOT PURSUIT from lv7");
         let b = Bests::parse("HOT PURSUIT from lv7=31\n");
-        assert_eq!(b.get(Mode::Pursuit, 7), Some(31.0));
-        assert_eq!(b.get(Mode::Pursuit, 1), None);
-        let t0 = Instant::now();
-        let mut t = Test::new(Mode::Pursuit, &["ab"; 100]);
-        "ab ab ab ".chars().for_each(|c| t.type_char(c, t0));
-        assert_eq!(score(&t, t0), Some(3.0), "words, not wpm");
-        assert_eq!(show(Mode::Pursuit, 3.0), "3 words");
+        assert_eq!(b.get(from(7)), Some(31.0));
+        assert_eq!(b.get(from(1)), None);
+        assert_eq!(show(from(1), 3.0), "3 words");
     }
 
     #[test]

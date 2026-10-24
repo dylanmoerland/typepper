@@ -946,7 +946,7 @@ pub fn go_burst(
 
 /// Survival under 3s of fuel: a lub-dub heartbeat (0..1), quicker under 1.5s.
 pub fn fuel_beat(t: &Test, now: Instant) -> f64 {
-    if t.mode != Mode::Survival || t.started.is_none() || t.fuel >= 3.0 || calm() {
+    if !matches!(t.mode, Mode::Survival { .. }) || t.started.is_none() || t.fuel >= 3.0 || calm() {
         return 0.0;
     }
     // fixed tiers: a rate that drifts with the fuel would skip the phase around
@@ -1017,7 +1017,8 @@ pub fn bust_in(t: &Test) -> f64 {
 /// Pursuit with the cop under 3s away: a flash (0..1) on every red of the
 /// siren, like survival's heartbeat.
 pub fn siren_beat(t: &Test, now: Instant) -> f64 {
-    if t.mode != Mode::Pursuit || t.started.is_none() || bust_in(t) >= 3.0 || calm() {
+    if !matches!(t.mode, Mode::Pursuit { .. }) || t.started.is_none() || bust_in(t) >= 3.0 || calm()
+    {
         return 0.0;
     }
     (-(anim_clock(t, now) * 3.0).fract() * 10.0).exp()

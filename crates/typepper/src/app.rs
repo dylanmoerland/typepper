@@ -11,8 +11,8 @@ use ratatui::text::Line;
 use web_time::Instant;
 
 use crate::best::{Bests, Outcome};
-use crate::engine::{LEVELS, Mode, Test, random_words};
-use crate::lava::{self, Lava};
+use crate::engine::{Game, Input, LEVELS, Mode, Round, Setup, Test};
+use crate::lava;
 use crate::menu::{self, Dialog, Menu, Pick};
 use crate::settings::{ROWS, Settings};
 use crate::ui;
@@ -34,26 +34,20 @@ pub enum Key {
 #[allow(clippy::large_enum_variant)] // only one Screen is ever alive
 enum Screen {
     Title,
-    Practice(Test),
-    Lava(Lava),
+    Play(Round),
 }
 
 impl Screen {
-    /// The test being played (or just finished) on this screen.
-    fn test(&self) -> Option<&Test> {
+    /// The round being played (or just finished) on this screen.
+    fn round(&self) -> Option<&Round> {
         match self {
-            Screen::Practice(t) => Some(t),
-            Screen::Lava(l) => Some(&l.test),
+            Screen::Play(r) => Some(r),
             Screen::Title => None,
         }
     }
 
-    fn test_mut(&mut self) -> Option<&mut Test> {
-        match self {
-            Screen::Practice(t) => Some(t),
-            Screen::Lava(l) => Some(&mut l.test),
-            Screen::Title => None,
-        }
+    fn test(&self) -> Option<&Test> {
+        self.round().map(Round::test)
     }
 }
 
@@ -148,12 +142,11 @@ impl App {
         // in any test: tab restarts (at once mid-test; every other screen change
         // dissolves), enter on the results plays again, from the same level
         let test = self.screen.test();
-        if let Some((mode, start, done)) =
-            test.map(|t| (t.mode, t.start_level, t.finished.is_some()))
+        if let Some((mode, done)) = test.map(|t| (t.mode, t.finished.is_some()))
             && (matches!(key, Key::Tab) || matches!(key, Key::Enter) && done)
         {
             let instant = matches!(key, Key::Tab) && !done;
-            self.go(practice(mode, start), now);
+            self.go(practice(mode), now);
             if instant {
                 self.fade = None;
             }
@@ -162,10 +155,12 @@ impl App {
         match (&mut self.screen, key) {
             (Screen::Title, Key::Esc) => return true,
             // zen has no clock: esc is how it ends
-            (Screen::Practice(test), Key::Esc)
-                if test.mode == Mode::Zen && test.started.is_some() && test.finished.is_none() =>
+            (Screen::Play(r), Key::Esc)
+                if r.test().mode == Mode::Zen
+                    && r.test().started.is_some()
+                    && r.test().finished.is_none() =>
             {
-                test.finish(now)
+                r.input(r.ms(now), Input::End)
             }
             (_, Key::Esc) => {
                 self.menu.back(now);
@@ -182,14 +177,9 @@ impl App {
             (Screen::Title, Key::Down) => self.menu.length(1, now),
             (Screen::Title, Key::Enter | Key::Char(' ')) => self.menu.press(now),
             (Screen::Title, _) => {}
-            (Screen::Lava(l), key) => match key {
-                Key::Backspace => l.backspace(),
-                Key::Char(c) => l.key(c, now),
-                _ => {}
-            },
-            (Screen::Practice(test), key) => match key {
-                Key::Backspace => test.backspace(now),
-                Key::Char(c) => test.type_char(c, now),
+            (Screen::Play(r), key) => match key {
+                Key::Backspace => r.input(r.ms(now), Input::Backspace),
+                Key::Char(c) => r.input(r.ms(now), Input::Char(c)),
                 _ => {}
             },
         }
@@ -213,7 +203,7 @@ impl App {
         match &mut self.screen {
             Screen::Title if self.menu.press_done(now) => {
                 let mode = self.menu.mode();
-                next = Some(practice(mode, 1));
+                next = Some(practice(mode));
                 ask = mode.leveled().then_some(mode);
             }
             // demo: show off the carousel for a lap, then play
@@ -226,42 +216,26 @@ impl App {
                 }
             }
             Screen::Title => {}
-            Screen::Practice(test) => {
+            Screen::Play(r) => {
                 if let Some(bot) = self.bot.as_mut().filter(|_| !picking) {
-                    bot.drive(test, now);
-                    if touring
-                        && test
-                            .finished
-                            .is_some_and(|f| now - f > Duration::from_secs(4))
-                    {
-                        next = Some(practice(test.mode, test.start_level));
+                    bot.drive(r, now);
+                    let over = r.test().finished;
+                    if touring && over.is_some_and(|f| now - f > Duration::from_secs(4)) {
+                        next = Some(practice(r.setup.mode));
                     }
                 }
-                test.tick(now);
-            }
-            Screen::Lava(l) => {
-                if let Some(bot) = self.bot.as_mut().filter(|_| !picking) {
-                    bot.drive_lava(l, now);
-                    if touring
-                        && l.test
-                            .finished
-                            .is_some_and(|f| now - f > Duration::from_secs(4))
-                    {
-                        next = Some(practice(l.test.mode, l.test.start_level));
-                    }
-                }
-                l.tick(now);
+                r.advance(r.ms(now));
             }
         }
         // finished: dissolve into results, and score it (demo runs don't count)
-        if let Some(test) = self.screen.test()
-            && let Some(end) = test.finished
+        if let Some(r) = self.screen.round()
+            && let Some(round) = r.result()
             && !self.scored
         {
             self.scored = true;
             self.fade = self.frame.take().map(|b| (b, now));
             if self.bot.is_none() {
-                self.outcome = self.bests.record(test, end);
+                self.outcome = self.bests.record(r.setup.mode, &round);
             }
         }
         if let Some(s) = next {
@@ -272,12 +246,13 @@ impl App {
         }
     }
 
-    /// Close the level picker and set the game to start from its choice.
+    /// Close the level picker and start the game from its choice.
     fn start_from(&mut self) {
         let Some(p) = self.pick.take() else { return };
-        if let Some(t) = self.screen.test_mut() {
-            t.start_level = LEVELS[p.choice];
-            self.menu.set_start(t.mode, p.choice);
+        if let Screen::Play(r) = &mut self.screen {
+            let mode = r.setup.mode.from_level(LEVELS[p.choice]);
+            self.menu.set_start(mode, p.choice);
+            *r = Round::new(Setup { mode, ..r.setup });
         }
     }
 
@@ -290,9 +265,10 @@ impl App {
                     menu::dialog(f, d, &self.settings, now);
                 }
             }
-            Screen::Practice(test) => ui::draw(f, test, self.outcome),
-            Screen::Lava(l) if l.test.finished.is_some() => ui::draw(f, &l.test, self.outcome),
-            Screen::Lava(l) => lava::draw(f, l, now),
+            Screen::Play(r) => match &r.game {
+                Game::Lava(l) if l.test.finished.is_none() => lava::draw(f, l, now),
+                _ => ui::draw(f, r.test(), self.outcome),
+            },
         }
         if let (Some(p), Some(t)) = (&self.pick, self.screen.test()) {
             menu::pick(f, p, t.mode, &self.bests, now);
@@ -334,21 +310,10 @@ fn reload() {
     }
 }
 
-/// A fresh game of `mode`, starting at level `start` (leveled modes).
-fn practice(mode: Mode, start: u32) -> Screen {
-    if let Mode::Lava(aim) = mode {
-        let mut l = Lava::new(aim);
-        l.test.start_level = start;
-        return Screen::Lava(l);
-    }
-    // only word tests end on their own text; the rest stream more in as you type
-    let n = match mode {
-        Mode::Words(n) => n,
-        _ => 100,
-    };
-    let mut t = Test::new(mode, &random_words(n));
-    t.start_level = start;
-    Screen::Practice(t)
+/// A fresh round of `mode`, on new words.
+fn practice(mode: Mode) -> Screen {
+    let seed = rand::random();
+    Screen::Play(Round::new(Setup { mode, seed }))
 }
 
 /// The autopilot: types whatever test is on screen with occasional fixed
@@ -396,39 +361,33 @@ impl Bot {
         Bot { typos: 0.0, ..self }
     }
 
-    fn drive(&mut self, t: &mut Test, now: Instant) {
-        // after a menu or a new test, resync instead of bursting the backlog
-        if t.started.is_none() && self.next + Duration::from_millis(500) < now {
+    /// Types into the round on screen, through the same inputs as a player.
+    fn drive(&mut self, r: &mut Round, now: Instant) {
+        // after a menu or a new round, resync instead of bursting the backlog
+        if r.test().started.is_none() && self.next + Duration::from_millis(500) < now {
             self.next = now;
         }
         let mut rng = rand::rng();
-        while self.next <= now && t.finished.is_none() {
+        while self.next <= now && r.test().finished.is_none() {
             let at = self.next;
-            if self.fixing {
-                t.backspace(at);
-                self.fixing = false;
-            } else if rng.random_bool(self.typos) {
-                t.type_char('#', at);
-                // pursuit: a miss stays put, so there's nothing to take back
-                self.fixing = t.mode != Mode::Pursuit;
-            } else if let Some(&c) = t.target.get(t.typed.len()) {
-                t.type_char(c, at);
+            let input = match &r.game {
+                // FLOOR IS LAVA: finishes the word it's on, or starts the lowest one
+                Game::Lava(l) => l.next_char().map(Input::Char),
+                Game::Test(_) if self.fixing => {
+                    self.fixing = false;
+                    Some(Input::Backspace)
+                }
+                Game::Test(t) if rng.random_bool(self.typos) => {
+                    // pursuit: a miss stays put, so there's nothing to take back
+                    self.fixing = !matches!(t.mode, Mode::Pursuit { .. });
+                    Some(Input::Char('#'))
+                }
+                Game::Test(t) => t.target.get(t.typed.len()).map(|&c| Input::Char(c)),
+            };
+            if let Some(input) = input {
+                r.input(r.ms(at), input);
             }
-            self.next = self.after(t, at);
-        }
-    }
-
-    /// FLOOR IS LAVA: finishes the word it's on, or starts the lowest one.
-    fn drive_lava(&mut self, l: &mut Lava, now: Instant) {
-        if l.test.started.is_none() && self.next + Duration::from_millis(500) < now {
-            self.next = now;
-        }
-        while self.next <= now && l.test.finished.is_none() {
-            let at = self.next;
-            if let Some(c) = l.next_char() {
-                l.key(c, at);
-            }
-            self.next = self.after(&l.test, at);
+            self.next = self.after(r.test(), at);
         }
     }
 
@@ -448,26 +407,33 @@ mod tests {
     use super::*;
 
     /// A bot that fumbles its first key, then types on clean for one more.
-    fn fumble(mode: Mode) -> Test {
+    fn fumble(mode: Mode) -> Round {
         let t0 = Instant::now();
-        let mut t = Test::new(mode, &["ab"; 10]);
+        let mut r = Round::new(Setup { mode, seed: 1 });
         let mut bot = Bot {
             next: t0,
             typos: 1.0,
             ..Bot::typist(60.0)
         };
-        bot.drive(&mut t, t0);
+        bot.drive(&mut r, t0);
         bot.typos = 0.0;
-        bot.drive(&mut t, bot.next);
-        t
+        bot.drive(&mut r, bot.next);
+        r
     }
 
     #[test]
     fn the_bot_fixes_its_typos_except_in_pursuit() {
-        let t = fumble(Mode::Words(10));
+        let r = fumble(Mode::Words(10));
+        let t = r.test();
         assert_eq!((t.typed.len(), t.erased.len()), (0, 1), "took the # back");
-        let t = fumble(Mode::Pursuit);
-        assert_eq!(t.typed, ['a'], "the miss stayed put, then it went on");
+        let r = fumble(Mode::Pursuit { start_level: 1 });
+        let t = r.test();
+        assert_eq!(
+            t.typed,
+            [t.target[0]],
+            "the miss stayed put, then it went on"
+        );
         assert_eq!((t.errors, t.erased.len()), (1, 0));
+        assert_eq!(r.log.len(), 2, "both keys went through the round's inputs");
     }
 }

@@ -3585,8 +3585,17 @@ dependencies = [
  "ratatui",
  "ratzilla",
  "terminal-colorsaurus",
+ "typepper-engine",
  "wasm-bindgen-futures",
  "web-sys",
+ "web-time",
+]
+
+[[package]]
+name = "typepper-engine"
+version = "0.3.0"
+dependencies = [
+ "libm",
  "web-time",
 ]
 

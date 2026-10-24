@@ -53,14 +53,23 @@ pub const MENU: [Group; 6] = [
         blurb: "feed the fuel · it drains faster every level",
         color: (255, 50, 30),
         scene: survival,
-        modes: &[Mode::Survival],
+        modes: &[Mode::Survival { start_level: 1 }],
     },
     Group {
         name: "FLOOR IS LAVA",
         blurb: "type the words before they hit the lava",
         color: (255, 110, 20),
         scene: lava,
-        modes: &[Mode::Lava(Aim::Lock), Mode::Lava(Aim::Free)],
+        modes: &[
+            Mode::Lava {
+                aim: Aim::Lock,
+                start_level: 1,
+            },
+            Mode::Lava {
+                aim: Aim::Free,
+                start_level: 1,
+            },
+        ],
     },
     Group {
         name: "HOT PURSUIT",
@@ -68,7 +77,7 @@ pub const MENU: [Group; 6] = [
         // police blue: stays blue (not teal like ZEN) when the light theme deepens it
         color: POLICE,
         scene: pursuit,
-        modes: &[Mode::Pursuit],
+        modes: &[Mode::Pursuit { start_level: 1 }],
     },
 ];
 
@@ -82,9 +91,9 @@ fn slot(m: Mode) -> usize {
         Mode::Words(_) => 0,
         Mode::Time(_) => 1,
         Mode::Zen => 2,
-        Mode::Survival => 3,
-        Mode::Lava(_) => 4,
-        Mode::Pursuit => 5,
+        Mode::Survival { .. } => 3,
+        Mode::Lava { .. } => 4,
+        Mode::Pursuit { .. } => 5,
     }
 }
 
@@ -407,7 +416,7 @@ pub fn pick(f: &mut Frame, p: &Pick, mode: Mode, bests: &Bests, now: Instant) {
         Line::from(heat.fg(rank_color(rank)).bold()).centered(),
         row(3),
     );
-    let best = match bests.get(mode, LEVELS[p.choice]) {
+    let best = match bests.get(mode.from_level(LEVELS[p.choice])) {
         Some(v) => format!("best {}", best::show(mode, v)),
         None => "no best from here yet".to_string(),
     };
@@ -570,7 +579,7 @@ fn carousel(buf: &mut Buffer, area: Rect, m: &Menu, bests: &Bests, now: Instant,
         } else {
             1
         };
-        let best = bests.get(mode, start).map(|v| match start {
+        let best = bests.get(mode.from_level(start)).map(|v| match start {
             1 => best::show(mode, v),
             _ => format!("{} · from lv{start}", best::show(mode, v)),
         });
@@ -1122,11 +1131,27 @@ mod tests {
         m.swipe(-1, t0);
         assert_eq!(m.sel(), 5, "wraps past the first card");
         m.length(1, t0);
-        assert_eq!(m.mode(), Mode::Pursuit, "single-length modes stay put");
+        assert_eq!(
+            m.mode(),
+            Mode::Pursuit { start_level: 1 },
+            "single-length modes stay put"
+        );
         m.swipe(-1, t0);
-        assert_eq!(m.mode(), Mode::Lava(Aim::Lock));
+        assert_eq!(
+            m.mode(),
+            Mode::Lava {
+                aim: Aim::Lock,
+                start_level: 1
+            }
+        );
         m.length(1, t0);
-        assert_eq!(m.mode(), Mode::Lava(Aim::Free));
+        assert_eq!(
+            m.mode(),
+            Mode::Lava {
+                aim: Aim::Free,
+                start_level: 1
+            }
+        );
         let done = t0 + Duration::from_secs(1);
         assert_eq!(m.scroll(done), -2.0);
         assert!(
@@ -1147,6 +1172,6 @@ mod tests {
                 assert_eq!(slot(m), i, "{m}");
             }
         }
-        assert_eq!(label(Mode::Pursuit), "HOT PURSUIT");
+        assert_eq!(label(Mode::Pursuit { start_level: 1 }), "HOT PURSUIT");
     }
 }
