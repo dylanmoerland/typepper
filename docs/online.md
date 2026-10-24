@@ -256,7 +256,7 @@ client's own score, kept only to log runs the server scores differently.
 | `v1 link <github-login>` | `/auth/github` → `/auth/callback` | ties this ssh key / browser to a player |
 | `v1 board <mode> <period>` | `GET /v1/boards/{mode}?period=` | `day`, `week`, `month`, `year`, `all` |
 | | `GET /v1/runs/{id}` | replay bytes, for the web player |
-| `ping` | `GET /health` | is the server up |
+| `ping` | `GET /health` | readiness: 200 `pass` once Postgres answers, else 503 `fail`; body in the IETF health check format (`application/health+json`: `releaseId`, deployment, Postgres timing) |
 | | `GET r.typepper.com/{id}` | OG tags, then redirect to `typepper.com/?replay={id}` |
 
 `/health`, `/auth/*` and share links are unversioned: health is for Railway,
