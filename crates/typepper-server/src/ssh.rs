@@ -60,13 +60,32 @@ impl Handler for Door {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         let (out, status) = run(command);
-        session.channel_success(channel)?;
-        session.data(channel, out.into_bytes())?;
-        session.exit_status_request(channel, status)?;
-        session.eof(channel)?;
-        session.close(channel)?;
-        Ok(())
+        reply(channel, out, status, session)
     }
+
+    // a plain `ssh ssh.typepper.com`: no shell here, say so instead of hanging
+    async fn shell_request(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let out = "typepper: no shell here; the game runs its commands (try `ping`)\r\n";
+        reply(channel, out.into(), 1, session)
+    }
+}
+
+/// Answer a command: its output, its exit status, then hang up.
+fn reply(
+    channel: ChannelId,
+    out: String,
+    status: u32,
+    session: &mut Session,
+) -> Result<(), russh::Error> {
+    session.channel_success(channel)?;
+    session.data(channel, out.into_bytes())?;
+    session.exit_status_request(channel, status)?;
+    session.eof(channel)?;
+    session.close(channel)
 }
 
 /// One command → what to print, and the exit status.
