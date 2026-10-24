@@ -4,6 +4,13 @@ What changed in each typepper release, newest first.
 
 ## Unreleased
 
+- Share a round: press u on the results screen for a link anyone can open to watch it, key by key, in their browser. No account needed
+- Leaderboards: press b on the menu to see the best for today, this week, this month, this year and all time. Link your GitHub account once with `typepper link <your-github-login>` (it uses your ssh key) and your rounds go up by themselves, with your rank on the results screen. Rounds played offline go up the next time you're online
+- Watch your last round again with `typepper --replay`
+- New setting, online: off, turns all of that off. typepper never needs the internet to play
+- Reaper disco: hit Carolina reaper and a mirror ball drops while a break-dancing pepper tackles the crowd and moonwalks
+- The version now shows on the title screen (and `typepper --version` prints it)
+
 ## [0.3.0] - 2026-10-22
 
 - New mode, HOT PURSUIT: a cop chases your caret down the text you've typed and speeds up with every word and every second, so stay ahead or you're busted. A wrong key stops you until you type the right one. Start from level 1, 4, 7 or 10; bests are kept per starting level (thanks @y0sif!)
