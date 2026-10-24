@@ -444,7 +444,8 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
         Constraint::Length(below),
     ])
     .areas(area);
-    let [_, tag, _, cards, _, dot_row, _, help] = Layout::vertical([
+    let [_, tag, version, _, cards, _, dot_row, _, help] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
@@ -513,6 +514,13 @@ pub fn draw(f: &mut Frame, m: &Menu, bests: &Bests, now: Instant) {
     Line::from("a spicy little typing game".dark_gray())
         .centered()
         .render(tag, f.buffer_mut());
+    // the release this is (the server says its own in /health): a step
+    // fainter than the tagline's dark gray (120; light mode flips grays, so
+    // it's fainter there too), padded so the scenery keeps its distance
+    let faint = Color::Rgb(88, 88, 88);
+    Line::from(format!("  v{}  ", env!("CARGO_PKG_VERSION")).fg(faint))
+        .centered()
+        .render(version, f.buffer_mut());
 
     carousel(f.buffer_mut(), cards, m, bests, now, secs);
 
