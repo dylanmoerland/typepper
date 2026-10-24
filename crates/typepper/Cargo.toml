@@ -1,11 +1,11 @@
 [package]
 name = "typepper"
-version = "0.3.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "A spicy little typing game for your terminal and browser"
-license = "GPL-3.0-or-later"
-repository = "https://github.com/leodiegues/typepper"
-homepage = "https://typepper.com/"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 rand = "0.10.3"

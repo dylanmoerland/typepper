@@ -74,7 +74,7 @@ cargo release <patch|minor|major>
 cargo release <patch|minor|major> --execute --no-confirm
 ```
 
-This bumps `crates/typepper/Cargo.toml` and `Cargo.lock`, commits `Release vX.Y.Z`, tags it,
+This bumps the shared version in the root `Cargo.toml` (every crate inherits it) and `Cargo.lock`, commits `Release vX.Y.Z`, tags it,
 and pushes `main` and the tag.
 
 If it fails before pushing, everything is still local: fix it and retry (ask

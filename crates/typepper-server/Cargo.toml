@@ -1,10 +1,11 @@
 [package]
 name = "typepper-server"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "typepper's server: leaderboards, accounts and shareable replays"
-license = "GPL-3.0-or-later"
-repository = "https://github.com/leodiegues/typepper"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 publish = false
 
 # deployed to Railway (see infra/), not released with the game

@@ -4,6 +4,14 @@ members = ["crates/*"]
 # plain `cargo build`/`clippy`/`test` mean the game
 default-members = ["crates/typepper"]
 
+# one version for every crate: the release's (cargo release bumps it here)
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/leodiegues/typepper"
+homepage = "https://typepper.com/"
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
