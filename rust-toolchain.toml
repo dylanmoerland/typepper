@@ -1,0 +1,6 @@
+# One Rust for everyone: CI cache keys stay put and upgrades are a deliberate
+# commit. Keep infra/docker/typepper-server.Dockerfile's tag in step.
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

@@ -1,0 +1,16 @@
+# Everything in CI and the server image is pinned by hash; these bump the pins
+# (and the caches turn over only then).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    # cargo-dist writes release.yml, and refuses to release if it's been edited
+    exclude-paths: [".github/workflows/release.yml"]
+    schedule: { interval: weekly }
+    groups: { actions: { patterns: ["*"] } }
+  - package-ecosystem: docker
+    directory: /infra/docker
+    schedule: { interval: weekly }
+  - package-ecosystem: npm
+    directory: /infra/railway
+    schedule: { interval: weekly }

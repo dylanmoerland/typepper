@@ -41,7 +41,7 @@ paru -S typepper       # builds from source
 > [!NOTE]
 > The AUR version is community maintained by [@Vaishnav-Sabari-Girish](https://github.com/Vaishnav-Sabari-Girish/), so it may be a bit behind on the latest release.
 
-Or build it yourself: `cargo install --git https://github.com/leodiegues/typepper`
+Or build it yourself: `cargo install --git https://github.com/leodiegues/typepper typepper`
 
 ## A look
 

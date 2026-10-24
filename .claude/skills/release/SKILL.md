@@ -9,7 +9,7 @@ A `vX.Y.Z` tag drives everything. Pushing it starts `release.yml` (cargo-dist:
 binaries for 5 platforms plus the shell/PowerShell installers, published as a
 GitHub Release whose notes come from that version's `CHANGELOG.md` section)
 and `pages.yml` (deploys the web game to https://typepper.com). `cargo release`
-makes the tag (config in `release.toml`). Your part is the judgment around it,
+makes the tag (config in `crates/typepper/release.toml`). Your part is the judgment around it,
 the version and the notes, and confirming it all landed.
 
 Once a tag is pushed, installers and the website update for everyone, so get
@@ -74,7 +74,7 @@ cargo release <patch|minor|major>
 cargo release <patch|minor|major> --execute --no-confirm
 ```
 
-This bumps `Cargo.toml` and `Cargo.lock`, commits `Release vX.Y.Z`, tags it,
+This bumps the shared version in the root `Cargo.toml` (every crate inherits it) and `Cargo.lock`, commits `Release vX.Y.Z`, tags it,
 and pushes `main` and the tag.
 
 If it fails before pushing, everything is still local: fix it and retry (ask

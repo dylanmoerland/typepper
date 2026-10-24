@@ -34,3 +34,6 @@ rustc-ice-*.txt
 # recordings: demo/record.sh remakes them (the GIFs used by the README are committed)
 /assets/gifs/*.mp4
 .DS_Store
+
+# infra/railway: npm ci fetches the Railway SDK and CLI
+node_modules/

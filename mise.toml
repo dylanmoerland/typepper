@@ -1,0 +1,61 @@
+# The project's tools, pinned (exact versions and checksums in mise.lock).
+# `mise install` sets you up; `mise tasks` lists what you can run.
+# Rust stays in rust-toolchain.toml: rustup reads it (and so does mise's rust).
+
+[tools]
+node = "24"                              # the Railway SDK that railway.ts imports
+"github:railwayapp/cli" = "5.71.0"       # railway (IaC needs 5.42.1 or newer)
+"github:trunk-rs/trunk" = "0.21.14"      # the web build (the registry's `trunk` is another tool)
+"github:axodotdev/cargo-dist" = "0.33.0" # dist, as in dist-workspace.toml
+cargo-release = "1.1.7"
+
+[settings]
+lockfile = true
+
+[env]
+# typepper's Railway project (workspace Typepper). The infra tasks refuse to
+# run against anything else: an apply deletes whatever railway.ts doesn't name.
+TYPEPPER_RAILWAY_PROJECT = "a7b1a2d7-143b-4f67-b433-4f66166201c5"
+
+[tasks."infra:guard"]
+description = "Refuse unless this folder is linked to typepper's Railway project"
+run = '''
+[ -n "$RAILWAY_TOKEN" ] && exit 0 # CI: the project token only reaches typepper
+railway status --json | grep -q "$TYPEPPER_RAILWAY_PROJECT" || {
+  echo "not linked to typepper: railway link -w Typepper -p $TYPEPPER_RAILWAY_PROJECT -e production" >&2
+  exit 1
+}
+'''
+
+[tasks."infra:setup"]
+description = "Fetch the Railway SDK railway.ts imports"
+run = "npm ci --prefix infra/railway"
+sources = ["infra/railway/package-lock.json"]
+outputs = ["infra/railway/node_modules/.package-lock.json"]
+
+[tasks."infra:plan"]
+description = "Show what applying infra/railway/railway.ts would change (read-only)"
+depends = ["infra:guard", "infra:setup"]
+run = "railway config plan --file infra/railway/railway.ts"
+
+[tasks."infra:apply"]
+description = "Apply infra/railway/railway.ts (never destructive without asking)"
+depends = ["infra:guard", "infra:setup"]
+run = "railway config apply --file infra/railway/railway.ts"
+
+[tasks."infra:deploy"]
+description = "Upload this checkout for Railway to build and deploy, without waiting"
+depends = ["infra:guard"]
+run = "railway up --detach --service typepper-server"
+
+[tasks.server]
+description = "Run typepper-server against a local Postgres (docker)"
+run = '''
+docker start typepper-pg >/dev/null 2>&1 ||
+  docker run -d --name typepper-pg -e POSTGRES_PASSWORD=typepper -p 55432:5432 postgres:17-alpine >/dev/null
+key="${TMPDIR:-/tmp}/typepper-host-key"
+[ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -f "$key"
+echo "http://localhost:8080/health · ssh -p 2222 localhost ping"
+TYPEPPER_SSH_HOST_KEY="$(cat "$key")" TYPEPPER_DATABASE_URL=postgres://postgres:typepper@localhost:55432/postgres \
+  cargo run -p typepper-server
+'''

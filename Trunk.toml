@@ -1,0 +1,3 @@
+# Trunk builds the web game from index.html (the game crate is under crates/)
+[build]
+target = "index.html"

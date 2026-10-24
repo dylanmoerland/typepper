@@ -1,0 +1,23 @@
+[package]
+name = "typepper"
+version.workspace = true
+edition.workspace = true
+description = "A spicy little typing game for your terminal and browser"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+rand = "0.10.3"
+ratatui = { version = "0.30.2", default-features = false, features = ["std", "layout-cache"] }
+web-time = "1.1.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ratatui = { version = "0.30.2", features = ["crossterm"] }
+terminal-colorsaurus = "1.0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ratzilla = "0.3.1"
+getrandom = { version = "0.4", features = ["wasm_js"] }
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["CssStyleDeclaration", "Element", "FontFaceSet", "MediaQueryList", "Storage"] }
