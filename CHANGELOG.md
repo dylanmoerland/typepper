@@ -4,6 +4,8 @@ What changed in each typepper release, newest first.
 
 ## Unreleased
 
+## [0.4.0] - 2026-10-24
+
 - Share a round: press u on the results screen for a link anyone can open to watch it, key by key, in their browser. No account needed
 - Leaderboards: press b on the menu to see the best for today, this week, this month, this year and all time. Link your GitHub account once with `typepper link <your-github-login>` (it uses your ssh key) and your rounds go up by themselves, with your rank on the results screen. Rounds played offline go up the next time you're online
 - Watch your last round again with `typepper --replay`
