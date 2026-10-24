@@ -1,6 +1,8 @@
 //! typepper's server: the HTTP API and the SSH door, over one Postgres.
 //! See docs/online.md.
 
+mod accounts;
+mod github;
 mod http;
 mod id;
 mod runs;

@@ -39,10 +39,16 @@ enum Screen {
     Watch(Watch),
 }
 
-/// Sharing the finished round: under way, or how it went (its link, or why not).
-enum Share {
-    Sending(Upload),
-    Done(Result<String, String>),
+/// Rounds going up: a shared one (anonymous), or a linked player's outbox.
+/// One at a time; it carries on if the player moves on, and only the
+/// results screen it started on talks about it.
+struct Share {
+    /// The screen it started on (`App::screens`).
+    screen: u64,
+    /// The outbox entries it carries (none: an anonymous share).
+    outbox: Vec<String>,
+    /// Under way, or how it went for this round: its link, or why not.
+    state: Result<Upload, Result<String, String>>,
 }
 
 /// A replay playing back: its inputs land on a fresh round as their time comes.
@@ -91,6 +97,11 @@ pub struct App {
     frame: Option<Buffer>,
     fade: Option<(Buffer, Instant)>,
     share: Option<Share>,
+    /// Screens shown so far (tells a share's results screen from the next).
+    screens: u64,
+    /// The GitHub login this machine is linked to (`typepper link`): its
+    /// rounds go up on their own.
+    account: Option<String>,
 }
 
 impl App {
@@ -125,6 +136,8 @@ impl App {
             frame: None,
             fade: None,
             share: None,
+            screens: 0,
+            account: online::account(),
         }
     }
 
@@ -179,6 +192,21 @@ impl App {
             }
             return false;
         }
+        // the results screen: u shares the round (a linked player's goes up
+        // on its own: u tries again if it couldn't)
+        if let (Screen::Play(r), Key::Char('u')) = (&self.screen, &key)
+            && r.test().finished.is_some()
+            && !self.settings.offline
+            && self.may_send()
+        {
+            let score = r.result().and_then(|o| o.score);
+            let body = online::submission(&Replay::of(r).encode(), score);
+            match self.account {
+                Some(_) => self.send_outbox(),
+                None => self.send(body, Vec::new()),
+            }
+            return false;
+        }
         match (&mut self.screen, key) {
             (Screen::Title, Key::Esc) => return true,
             // zen has no clock: esc is how it ends
@@ -204,19 +232,6 @@ impl App {
             (Screen::Title, Key::Down) => self.menu.length(1, now),
             (Screen::Title, Key::Enter | Key::Char(' ')) => self.menu.press(now),
             (Screen::Title, _) => {}
-            // the results screen: u shares the round (unless the player's offline)
-            (Screen::Play(r), Key::Char('u'))
-                if r.test().finished.is_some()
-                    && !self.settings.offline
-                    && !matches!(self.share, Some(Share::Sending(_) | Share::Done(Ok(_)))) =>
-            {
-                let score = r.result().and_then(|o| o.score);
-                let body = online::submission(&Replay::of(r).encode(), score);
-                self.share = Some(match Upload::start(body) {
-                    Ok(up) => Share::Sending(up),
-                    Err(why) => Share::Done(Err(why)),
-                });
-            }
             (Screen::Play(r), key) => match key {
                 Key::Backspace => r.input(r.ms(now), Input::Backspace),
                 Key::Char(c) => r.input(r.ms(now), Input::Char(c)),
@@ -232,10 +247,15 @@ impl App {
     }
 
     pub fn tick(&mut self, now: Instant) {
-        if let Some(Share::Sending(up)) = &mut self.share
-            && let Some(done) = up.poll()
+        if let Some(share) = &mut self.share
+            && let Ok(up) = &mut share.state
+            && let Some(answer) = up.poll()
         {
-            self.share = Some(Share::Done(done));
+            share.state = Err(answer.and_then(|text| {
+                online::outbox_settle(&share.outbox, &text);
+                // this round is the last one sent
+                online::answer(text.lines().last().unwrap_or(""))
+            }));
         }
         let mut next = None;
         // demo: take the suggested starting level after a moment
@@ -295,6 +315,13 @@ impl App {
                 crate::store::write_bytes("last.replay", &Replay::of(r).encode());
                 if self.bot.is_none() {
                     self.outcome = self.bests.record(r.setup.mode, &round);
+                    // a linked player's rounds go up on their own
+                    if self.account.is_some() && !self.settings.offline {
+                        online::outbox_add(&Replay::of(r).encode(), round.score);
+                        if self.may_send() {
+                            self.send_outbox();
+                        }
+                    }
                 }
             }
         }
@@ -355,27 +382,57 @@ impl App {
         }
     }
 
+    /// Nothing under way, and this screen's round hasn't gone up yet.
+    fn may_send(&self) -> bool {
+        match &self.share {
+            Some(s) if s.state.is_ok() => false,
+            Some(s) => s.screen != self.screens || s.state.as_ref().is_err_and(|r| r.is_err()),
+            None => true,
+        }
+    }
+
+    fn send(&mut self, body: Vec<u8>, outbox: Vec<String>) {
+        self.share = Some(Share {
+            screen: self.screens,
+            outbox,
+            state: Upload::start(body).map_err(Err),
+        });
+    }
+
+    fn send_outbox(&mut self) {
+        let (names, body) = online::outbox();
+        if !names.is_empty() {
+            self.send(body, names);
+        }
+    }
+
     /// The results screen's word on sharing (none offline, on touch screens
     /// with no u to press, or under someone else's replay).
     fn share_hint(&self) -> Option<String> {
         if self.settings.offline || touch() || !matches!(self.screen, Screen::Play(_)) {
             return None;
         }
-        let copied = if cfg!(target_arch = "wasm32") {
-            "copied"
-        } else {
-            "shared"
+        let share = self.share.as_ref().filter(|s| s.screen == self.screens);
+        let (going, done, again) = match self.account {
+            Some(_) => ("saving…", "saved", "it'll go up with the next one · u now"),
+            None if cfg!(target_arch = "wasm32") => ("sharing…", "copied", "u again"),
+            None => ("sharing…", "shared", "u again"),
         };
-        Some(match &self.share {
+        Some(match share.map(|s| &s.state) {
+            None if self.account.is_some() => "saved for later".into(),
             None => "u share".into(),
-            Some(Share::Sending(_)) => "sharing…".into(),
-            Some(Share::Done(Ok(link))) => format!("{copied}: {link}"),
-            Some(Share::Done(Err(why))) => format!("couldn't share: {why} · u again"),
+            Some(Ok(_)) => going.into(),
+            Some(Err(Ok(link))) => format!("{done}: {link}"),
+            Some(Err(Err(why))) => format!("couldn't send: {why} · {again}"),
         })
     }
 
     fn go(&mut self, screen: Screen, now: Instant) {
-        self.share = None;
+        // an upload carries on; whatever it says won't be about the next screen
+        self.screens += 1;
+        if self.share.as_ref().is_some_and(|s| s.state.is_err()) {
+            self.share = None;
+        }
         self.screen = screen;
         self.since = now;
         (self.outcome, self.scored) = (None, false);

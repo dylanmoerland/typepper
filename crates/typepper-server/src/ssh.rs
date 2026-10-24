@@ -12,6 +12,11 @@ use russh::{Channel, ChannelId};
 use sqlx::PgPool;
 
 use crate::runs::{self, Quota};
+use crate::{accounts, github};
+
+/// The user the game logs in as. Any other user is a GitHub login, linking a
+/// key to that account (`ssh -l <login> … v1 link`).
+const GAME_USER: &str = "typepper";
 
 pub async fn serve(
     key: PrivateKey,
@@ -32,6 +37,8 @@ pub async fn serve(
         quota,
         who: String::new(),
         uploads: HashMap::new(),
+        key: None,
+        github: None,
     };
     door.run_on_address(Arc::new(config), ("::", port)).await
 }
@@ -45,6 +52,61 @@ struct Door {
     who: String,
     /// `v1 submit` channels still reading their stdin.
     uploads: HashMap<ChannelId, Vec<u8>>,
+    /// The key that logged in (its fingerprint), and what it vouched for.
+    key: Option<(String, Vouch)>,
+    /// A linking login's keys on GitHub, asked once per connection.
+    github: Option<(String, Vec<String>)>,
+}
+
+/// What a key that got in stands for.
+#[derive(Clone, Debug)]
+enum Vouch {
+    /// A linked key: this player, `(id, login)`.
+    Player(i64, String),
+    /// A key on this login's GitHub, logging in to link to it.
+    Linking(String),
+}
+
+impl Door {
+    /// Whether `key` may log in as `user` (None turns it down, and the
+    /// client tries its next key, or none: anonymous).
+    async fn vouch(&mut self, user: &str, key: &PublicKey) -> Option<Vouch> {
+        if user == GAME_USER {
+            let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+            return match accounts::player_of_key(&self.db, &fingerprint).await {
+                Ok(player) => player.map(|(id, login)| Vouch::Player(id, login)),
+                Err(e) => {
+                    eprintln!("ssh: player_of_key: {e}");
+                    None
+                }
+            };
+        }
+        if !github::valid_login(user) {
+            return None;
+        }
+        let keys = match &self.github {
+            Some((login, keys)) if login == user => keys.clone(),
+            _ => {
+                let keys = github::keys(user)
+                    .await
+                    .inspect_err(|e| eprintln!("ssh: {e}"))
+                    .ok()?;
+                self.github = Some((user.to_string(), keys.clone()));
+                keys
+            }
+        };
+        let line = key.to_openssh().ok()?;
+        let line: Vec<&str> = line.split_whitespace().take(2).collect();
+        keys.contains(&line.join(" "))
+            .then(|| Vouch::Linking(user.to_string()))
+    }
+
+    fn player(&self) -> Option<(i64, String)> {
+        match &self.key {
+            Some((_, Vouch::Player(id, login))) => Some((*id, login.clone())),
+            _ => None,
+        }
+    }
 }
 
 impl Server for Door {
@@ -53,6 +115,8 @@ impl Server for Door {
         Door {
             who: addr.map_or("?".into(), |a| a.ip().to_string()),
             uploads: HashMap::new(),
+            key: None,
+            github: None,
             ..self.clone()
         }
     }
@@ -66,20 +130,41 @@ impl Handler for Door {
         Ok(Auth::reject())
     }
 
-    // any key gets in; linking a key to a player comes with `v1 link`
-    async fn auth_publickey(&mut self, _: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
-        self.who = key.fingerprint(HashAlg::Sha256).to_string();
+    // asked before the client signs, so a key that won't do never costs its
+    // owner an agent prompt
+    async fn auth_publickey_offered(
+        &mut self,
+        user: &str,
+        key: &PublicKey,
+    ) -> Result<Auth, Self::Error> {
+        Ok(match self.vouch(user, key).await {
+            Some(_) => Auth::Accept,
+            None => Auth::reject(),
+        })
+    }
+
+    async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
+        let Some(vouch) = self.vouch(user, key).await else {
+            return Ok(Auth::reject());
+        };
+        let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
+        self.who = fingerprint.clone();
+        self.key = Some((fingerprint, vouch));
         Ok(Auth::Accept)
     }
 
-    // no key at all: in anyway, with nothing asked (anonymous sharing)
+    // no key that's linked (or none at all): the game gets in anyway, with
+    // nothing asked, anonymously. Linking needs a key.
     async fn auth_keyboard_interactive<'a>(
         &'a mut self,
-        _: &str,
+        user: &str,
         _: &str,
         _: Option<Response<'a>>,
     ) -> Result<Auth, Self::Error> {
-        Ok(Auth::Accept)
+        Ok(match user == GAME_USER {
+            true => Auth::Accept,
+            false => Auth::reject(),
+        })
     }
 
     async fn channel_open_session(
@@ -98,13 +183,21 @@ impl Handler for Door {
         command: &[u8],
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        if command == b"v1 submit" {
-            // the submission comes on stdin; it's answered at its end
-            session.channel_success(channel)?;
-            self.uploads.insert(channel, Vec::new());
-            return Ok(());
-        }
-        let (out, status) = run(command);
+        let (out, status) = match command {
+            b"v1 submit" => {
+                // the submission comes on stdin; it's answered at its end
+                session.channel_success(channel)?;
+                self.uploads.insert(channel, Vec::new());
+                return Ok(());
+            }
+            b"v1 link" => self.link().await,
+            b"v1 whoami" => match self.player() {
+                Some((_, login)) => (format!("ok {login}\n"), 0),
+                None => ("ok anonymous\n".into(), 0),
+            },
+            b"v1 unlink" => self.unlink().await,
+            _ => run(command),
+        };
         reply(channel, out, status, session)
     }
 
@@ -138,8 +231,8 @@ impl Handler for Door {
             let out = "err rate-limited try again in an hour\n".into();
             return reply(channel, out, 1, session);
         }
-        // anonymous until keys can be linked to players
-        let out = runs::submit(&self.db, None, &body).await;
+        let player = self.player().map(|(id, _)| id);
+        let out = runs::submit(&self.db, player, &body).await;
         reply(channel, out, 0, session)
     }
 
@@ -151,6 +244,46 @@ impl Handler for Door {
     ) -> Result<(), Self::Error> {
         let out = "typepper: no shell here; the game runs its commands (try `ping`)\r\n";
         reply(channel, out.into(), 1, session)
+    }
+}
+
+impl Door {
+    /// `v1 link`, logged in as a GitHub login with one of its keys.
+    async fn link(&self) -> (String, u32) {
+        let Some((fingerprint, Vouch::Linking(login))) = &self.key else {
+            return (
+                "err not-linking log in as your GitHub login: ssh -l <login> … v1 link\n".into(),
+                1,
+            );
+        };
+        let linked = match github::user(login).await {
+            Ok((github_id, login)) => accounts::link(&self.db, github_id, &login, fingerprint)
+                .await
+                .map(|_| login)
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
+        match linked {
+            Ok(login) => (format!("ok linked {login}\n"), 0),
+            Err(e) => {
+                eprintln!("ssh: link: {e}");
+                ("err busy try later\n".into(), 1)
+            }
+        }
+    }
+
+    /// `v1 unlink`: the key that logged in lets go of its player.
+    async fn unlink(&self) -> (String, u32) {
+        let Some((fingerprint, Vouch::Player(..))) = &self.key else {
+            return ("ok not-linked\n".into(), 0);
+        };
+        match accounts::unlink(&self.db, fingerprint).await {
+            Ok(_) => ("ok unlinked\n".into(), 0),
+            Err(e) => {
+                eprintln!("ssh: unlink: {e}");
+                ("err busy try later\n".into(), 1)
+            }
+        }
     }
 }
 

@@ -254,7 +254,8 @@ client's own score, kept only to log runs the server scores differently.
 | SSH | HTTP | Does |
 |---|---|---|
 | `v1 submit`, submission on stdin | `POST api.typepper.com/v1/runs` | stores every run, returns a link; ranks it if the caller is known |
-| `v1 link <github-login>` | `/auth/github` → `/auth/callback` | ties this ssh key / browser to a player |
+| `-l <github-login> … v1 link` | `/auth/github` → `/auth/callback` (later) | ties this ssh key / browser to a player |
+| `v1 whoami`, `v1 unlink` | | the player this key is, or anonymous; let the key go |
 | `v1 board <mode> <period>` | `GET /v1/boards/{mode}?period=` | `day`, `week`, `month`, `year`, `all` |
 | | `GET /v1/runs/{id}` | replay bytes, for the web player |
 | `ping` | `GET /health` | readiness: 200 `pass` once Postgres answers, else 503 `fail`; body in the IETF health check format (`application/health+json`: `releaseId`, deployment, Postgres timing) |
@@ -290,11 +291,18 @@ Codes: `old-engine`, `bad-replay`, `too-big` (deleted); `busy`,
 
 ## Identity
 
-- **Web:** GitHub OAuth. The server swaps GitHub's token for its own session
-  (a 256-bit secret in a cookie; only its hash is stored) and keeps nothing
-  from GitHub but the user id and login.
-- **Terminal:** the player's ssh key. `v1 link <login>` checks that key against
-  `github.com/<login>.keys` and ties it to that GitHub user. No tokens on disk.
+- **Terminal (first):** the player's ssh key. `typepper link <login>` runs
+  `ssh -l <login> … v1 link`: logging in as a GitHub login means "link to it",
+  and the server only takes a key listed on `github.com/<login>.keys` (checked
+  when the key is offered, before the client signs, so a wrong key never
+  costs an agent prompt). It records the GitHub id (logins can be renamed)
+  and the key's fingerprint. The game logs in as `typepper` from then on; the
+  server takes only a linked key there, so a player with several keys is
+  still recognized. `typepper unlink` lets go. The game keeps only the login
+  (`account`), no tokens.
+- **Web (later, once the GitHub OAuth app exists):** GitHub OAuth. The server
+  swaps GitHub's token for its own session (a 256-bit secret in a cookie; only
+  its hash is stored) and keeps nothing from GitHub but the user id and login.
 - **Anonymous:** an unlinked key, no key at all, or a logged-out browser can
   still submit. The run gets a share link, is never ranked, and expires with
   the sweep.
@@ -397,8 +405,10 @@ Long-term rows: at most players × modes played × months, about 2 KB each.
   screens). `u` sends this round alone, anonymously; the line then says
   `sharing…`, `shared: r.typepper.com/<id>` (the web copies the link: a canvas
   has no text to select), or `couldn't share: <why> · u again`.
-- **Outbox (with accounts, phase 5):** once logged in, every finished round
-  goes into it and the whole outbox goes up in one `v1 submit`. `ok`,
+- **Outbox (linked terminal players):** every finished round (not the bot's)
+  goes into it and the whole outbox goes up in one `v1 submit`, as the
+  player; the results line says `saving…`, `saved: <link>`, or
+  `couldn't send: … · it'll go up with the next one`. `ok`,
   `old-engine`, `bad-replay` and `too-big` delete the entry; anything else
   keeps it for the next results screen. Never retried at startup. Hex text
   through `store` (`outbox/<engine>-<unix_ms>`, or `typepper.outbox.*` in
@@ -429,7 +439,7 @@ Long-term rows: at most players × modes played × months, about 2 KB each.
 | 2 | **Engine crate**: Mode refactor, `Round`, seeded RNG, fixed timestep, `libm`, `VERSION` | a bot round played live and its log run through `simulate` give the same outcome | 0 (parallel with 1) |
 | 3 | **Replay format, recording, watching** (no network yet): `engine::replay`, `Mode::key`/`parse`, the last round saved as `last.replay`, `typepper --replay [FILE]` | golden-bytes, round-trip and junk tests pass; a round and its replay end on the same results screen | 2 |
 | 4 | **Share**: anonymous `v1 submit` (SSH and HTTP), the `runs` table, `/v1/runs/{id}`, share page, `online.rs`, `u share`, web replay mode, the online setting | a terminal round becomes a link that plays back in a browser | 1, 3 |
-| 5 | **Identity**: OAuth, sessions, `v1 link`, cookies, the outbox | a linked key and a web login map to the same player | 4 |
+| 5 | **Identity, terminal first**: `players`/`ssh_keys` (migration 0002), `v1 link`/`whoami`/`unlink`, `typepper link`/`unlink`, the outbox. Web login (OAuth, sessions, cookies) once the OAuth app exists | a linked key's rounds go up as its player, offline rounds go up later | 4 |
 | 6 | **Leaderboards**: ranking in `submit`, boards, rank on the results screen, sweep | ranks show on the results screen; the sweep keeps exactly what boards need | 5 |
 
 ## Checks left behind

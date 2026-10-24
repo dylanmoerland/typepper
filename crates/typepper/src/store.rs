@@ -22,6 +22,24 @@ mod imp {
         std::fs::create_dir_all(p.parent().unwrap())?;
         std::fs::write(p, text)
     }
+
+    /// The names under `dir/`, sorted.
+    pub fn list(dir: &str) -> Vec<String> {
+        let Some(Ok(entries)) = path(dir).map(std::fs::read_dir) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|e| Some(format!("{dir}/{}", e.ok()?.file_name().to_str()?)))
+            .collect();
+        names.sort();
+        names
+    }
+
+    pub fn remove(name: &str) {
+        if let Some(p) = path(name) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -43,7 +61,7 @@ mod imp {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use imp::path;
+pub use imp::{list, path, remove};
 pub use imp::{read, write};
 
 /// Bytes, kept as hex (localStorage only holds text).

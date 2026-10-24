@@ -23,6 +23,35 @@ fn main() -> std::io::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     let flag = |f: &str| args.iter().any(|a| a == f);
+    // `typepper link <github-login>` / `typepper unlink`: tie this machine's
+    // ssh key to a GitHub account, so its rounds go up for the boards
+    match args.get(1).map(String::as_str) {
+        Some("link") => {
+            let Some(login) = args.get(2) else {
+                eprintln!("usage: typepper link <your-github-login>");
+                std::process::exit(2);
+            };
+            match online::link(login) {
+                Ok(login) => println!(
+                    "linked to github.com/{login}: your rounds go up from now on \
+                     (settings → online: off stops it, `typepper unlink` forgets it)"
+                ),
+                Err(why) => {
+                    eprintln!("typepper: couldn't link: {why}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        Some("unlink") => {
+            match online::unlink() {
+                Ok(()) => println!("unlinked: your rounds stay on this machine"),
+                Err(why) => eprintln!("typepper: {why}"),
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     // ask the terminal for its background before raw mode; unanswered → dark
     let light = flag("--light")
         || !flag("--dark")
