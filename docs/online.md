@@ -44,6 +44,44 @@ Railway's TCP proxy gives a port it picks, not 22. Players never type it: the
 game runs `ssh` itself. `TYPEPPER_SSH=host:port` overrides the address. Never
 delete the proxy, or released builds lose their address.
 
+## Deploys
+
+Production only, for now. Staging comes when real player data is worth
+protecting (around phase 5): a `ctx.environment` branch in `railway.ts`, a
+`staging` GitHub environment and a second deploy job.
+
+```mermaid
+flowchart LR
+  P["push to main<br/>(server, engine, Cargo.lock, infra/ changed)"] --> C["check: clippy + test"]
+  C --> D["deploy<br/>railway config apply --yes<br/>railway up --detach"]
+  D -. "uploads this commit,<br/>returns at once" .-> RB
+  subgraph railway["Railway"]
+    RB["builds infra/docker/typepper-server.Dockerfile"] --> HC{"/health ok?"}
+    HC -- yes --> LIVE["switches traffic"]
+    HC -- no --> OLD["old deployment keeps serving"]
+  end
+```
+
+- `.github/workflows/deploy-production.yml` deploys; Railway builds the image
+  itself (no registry). The service has no GitHub source in `railway.ts`, so
+  Railway never deploys on its own.
+- The deploy is detached: green CI means Railway accepted the upload. A failed
+  build or health check leaves the previous deployment serving.
+- `--yes` without `--confirm-destructive`: an apply that would delete anything
+  (say, the hand-made TCP proxy) fails instead.
+- Everything is pinned by hash: actions by commit SHA, base images by
+  `@sha256`, the toolchain in `rust-toolchain.toml`, the Railway SDK and CLI by
+  `package-lock.json`. Dependabot bumps them, and caches turn over only then.
+- Caching: rust-cache keyed by toolchain + `Cargo.lock`, saved from `main`
+  only; npm cache for `infra/railway`; cargo-chef keeps the dependency layer on
+  Railway's builder until `Cargo.lock` changes.
+- **Migrations only add** (tables, nullable or defaulted columns). Drops and
+  renames wait for a later deploy, once nothing reads the old shape.
+
+One-time setup: a Railway project token as `RAILWAY_TOKEN` in a `production`
+GitHub environment, the TCP proxy (internal port 2222) made by hand, and
+`SSH_HOST_KEY` set in Railway.
+
 ## Repository layout
 
 ```text
@@ -56,7 +94,6 @@ crates/
 │       ├── test.rs, lava.rs  # today's engine.rs / lava.rs rules
 │       └── replay.rs         # bytes format v1; imports nothing else from the engine
 └── typepper-server/          # (dist = false, not released)
-    ├── Dockerfile
     ├── migrations/0001_init.sql
     └── src/
         ├── main.rs           # env, pool, migrations, start http + ssh + hourly sweep
@@ -66,7 +103,23 @@ crates/
         ├── auth.rs           # GitHub OAuth, sessions, ssh link
         ├── runs.rs           # submit, store, verify, fetch, share page, sweep
         └── board.rs          # day / week / month / year / all-time boards
+infra/
+├── railway/                  # Railway IaC (the `railway` npm SDK) + the pinned Railway CLI
+│   ├── package.json
+│   └── railway.ts            # project, service, Postgres, domains, variables
+└── docker/
+    ├── typepper-server.Dockerfile             # pinned bases (@sha256), cargo-chef, multi-stage
+    └── typepper-server.Dockerfile.dockerignore
+rust-toolchain.toml           # pinned toolchain: stable cache keys, no surprise upgrades
+.github/
+├── dependabot.yml            # bumps action SHAs, image digests, npm pins
+└── workflows/deploy-production.yml
 ```
+
+No `typepper-database` crate: the server is the only thing that talks to
+Postgres, and each core module owns its SQL. When a second program needs the
+database (an admin CLI, a re-scoring worker), the server becomes a library with
+a second binary first.
 
 `http.rs` and `ssh.rs` hold no logic: both call the same core functions
 (`runs::submit(&db, caller: Option<PlayerId>, bytes)`), which own their SQL.
@@ -351,7 +404,7 @@ Long-term rows: at most players × modes played × months, about 2 KB each.
 | # | Phase | Done when | Needs |
 |---|---|---|---|
 | 0 | **Move into `crates/`**: Trunk, cargo-release, dist, CI, README, release skill | `cargo test`, both clippies and `trunk build` pass; `dist plan` and `cargo release` dry-run match today | — |
-| 1 | **Server skeleton on Railway**: `/health`, ssh `ping`, migration 0001, Dockerfile, DNS, `SSH_HOST_KEY` | `curl api.typepper.com/health` and `ssh -p PORT ssh.typepper.com ping` answer | 0 |
+| 1 | **Server skeleton on Railway**: `/health` (checks Postgres), ssh `ping`, Dockerfile, `infra/railway`, `deploy-production.yml`, pins, DNS, `SSH_HOST_KEY`. The first migration comes with the first table, in phase 4 | `curl api.typepper.com/health` and `ssh -p PORT ssh.typepper.com ping` answer | 0 |
 | 2 | **Engine crate**: Mode refactor, `Round`, seeded RNG, fixed timestep, `libm`, `VERSION` | a bot round played live and its log run through `simulate` give the same outcome | 0 (parallel with 1) |
 | 3 | **Replay format, recording, outbox** (no network yet) | golden-bytes, round-trip and junk tests pass; the outbox fills offline | 2 |
 | 4 | **Share**: anonymous `v1 submit`, `/v1/runs/{id}`, share page, `online.rs`, web replay mode | a terminal round becomes a link that plays back in a browser | 1, 3 |
