@@ -8,6 +8,7 @@ node = "24"                              # the Railway SDK that railway.ts impor
 "github:trunk-rs/trunk" = "0.21.14"      # the web build (the registry's `trunk` is another tool)
 "github:axodotdev/cargo-dist" = "0.33.0" # dist, as in dist-workspace.toml
 cargo-release = "1.1.7"
+zola = "0.23.6"
 
 [settings]
 lockfile = true
@@ -18,13 +19,23 @@ lockfile = true
 TYPEPPER_RAILWAY_PROJECT = "a7b1a2d7-143b-4f67-b433-4f66166201c5"
 
 [tasks."infra:guard"]
-description = "Refuse unless this folder is linked to typepper's Railway project"
+description = "Link this folder to typepper's Railway project if it isn't; refuse if it's linked to another"
 run = '''
 [ -n "$RAILWAY_TOKEN" ] && exit 0 # CI: the project token only reaches typepper
-railway status --json | grep -q "$TYPEPPER_RAILWAY_PROJECT" || {
-  echo "not linked to typepper: railway link -w Typepper -p $TYPEPPER_RAILWAY_PROJECT -e production" >&2
+railway status --json 2>/dev/null | grep -q "$TYPEPPER_RAILWAY_PROJECT" && exit 0
+# railway links folders, and an unlinked one falls back to its nearest linked
+# parent (a home folder linked to some other project). Only this folder's own
+# link counts: another project's is refused, never relinked
+own=$(python3 -I -c 'import json, os; print(json.load(open(os.path.expanduser("~/.railway/config.json"))).get("projects", {}).get(os.getcwd(), {}).get("project", ""))' 2>/dev/null)
+if [ "$own" = "$TYPEPPER_RAILWAY_PROJECT" ]; then
+  echo "linked to typepper, but railway status failed: railway login?" >&2
   exit 1
-}
+elif [ -n "$own" ]; then
+  echo "this folder is linked to another Railway project ($own): railway unlink here, then run this again" >&2
+  exit 1
+fi
+# a new checkout or worktree: link it, only ever to typepper's own project
+railway link -w Typepper -p "$TYPEPPER_RAILWAY_PROJECT" -e production
 '''
 
 [tasks."infra:setup"]
@@ -48,6 +59,11 @@ description = "Upload this checkout for Railway to build and deploy, without wai
 depends = ["infra:guard"]
 run = "railway up --detach --service typepper-server"
 
+[tasks."infra:deploy-docs"]
+description = "Upload this checkout for Railway to build and deploy docs.typepper.com, without waiting"
+depends = ["infra:guard"]
+run = "railway up --detach --service typepper-docs"
+
 [tasks.server]
 description = "Run typepper-server against a local Postgres (docker)"
 run = '''
@@ -59,4 +75,14 @@ echo "http://localhost:8080/health · ssh -p 2222 localhost ping"
 echo "a game that shares here: TYPEPPER_SSH=localhost:2222 TYPEPPER_SSH_KNOWN_HOST=\"\$(cat $key.pub)\" typepper"
 TYPEPPER_SSH_HOST_KEY="$(cat "$key")" TYPEPPER_DATABASE_URL=postgres://postgres:typepper@localhost:55432/postgres \
   cargo run -p typepper-server
+'''
+
+[tasks.docs]
+description = "Serve docs.typepper.com from docs/ at http://127.0.0.1:1111, reloading as you edit"
+run = '''
+python3 site/prepare.py
+# docs/ isn't Zola's content dir: copy edits across as they happen
+(while sleep 1; do python3 site/prepare.py; done) &
+trap "kill $!" EXIT
+zola --root site serve
 '''

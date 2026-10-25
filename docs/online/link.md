@@ -1,4 +1,5 @@
 ---
+weight: 2
 extra:
   covers:
     - crates/typepper/src/online.rs
@@ -59,4 +60,4 @@ ssh's own message, just above, says which:
   answer; try again later.
 
 The same thing by hand, for the curious, is in the
-[protocol](../protocol.md#linking).
+[protocol](../reference/protocol.md#linking).

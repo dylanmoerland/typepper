@@ -1,3 +1,7 @@
+---
+weight: 1
+---
+
 # Architecture
 
 typepper is a typing game that runs in a terminal and in a browser, plus a
@@ -48,6 +52,7 @@ flowchart LR
 | `api.typepper.com` | the HTTP API | Railway's edge (port 8080), Cloudflare proxied |
 | `r.typepper.com` | share pages (same service) | Railway's edge (port 8080), Cloudflare proxied |
 | `ssh.typepper.com` | the SSH door, port **36080** | Railway's TCP proxy (`sakura.proxy.rlwy.net:36080` → 2222), DNS only |
+| `docs.typepper.com` | these docs (static, its own service) | Railway's edge (port 8080), Cloudflare proxied |
 
 Railway picks the TCP proxy's port, and released games have it built in, so
 the proxy must never be recreated (see [operations](operations.md)).
@@ -62,9 +67,10 @@ crates/
 └── typepper-server/       # HTTP + SSH over Postgres; deployed, never released
 infra/
 ├── railway/railway.ts     # the Railway project, as code
-├── docker/                # the server's image
+├── docker/                # the server's and the docs' images
 └── ssh/                   # the server's public host key (the game ships it)
-docs/                      # these docs
+docs/                      # these docs: play/, online/, reference/, built/
+site/                      # docs.typepper.com: Zola templates, and prepare.py (docs/ → content)
 index.html, web/, assets/  # the web page around the game, and its assets
 demo/                      # recording the README's GIFs
 mise.toml, mise.lock       # pinned tools and tasks

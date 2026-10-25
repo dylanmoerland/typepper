@@ -22,3 +22,12 @@ jobs:
       - run: .github/docs-check.sh
         env:
           BODY: ${{ github.event.pull_request.body }}
+
+  # docs.typepper.com builds, with the image Railway deploys (so a Dependabot
+  # bump of its Zola is tested here): a broken link or #anchor between docs
+  # fails before it can fail a deploy
+  site:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build --target build -f infra/docker/typepper-docs.Dockerfile .

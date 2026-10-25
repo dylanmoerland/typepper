@@ -1,8 +1,9 @@
 ---
 title: play
+sort_by: weight
 weight: 1
 extra:
-  pepper: bell
+  pepper: bell pepper
 ---
 
 # Play
