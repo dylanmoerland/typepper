@@ -138,9 +138,11 @@ pub fn draw(f: &mut Frame, b: &Boards, me: Option<&str>, now: Instant) {
         }
     };
     f.render_widget(Paragraph::new(lines), table);
-    let hint = match me {
-        Some(_) => "←/→ period · esc menu",
-        None => "←/→ period · esc menu · `typepper link <github-login>` to be on it",
+    let hint = match (me, cfg!(target_arch = "wasm32")) {
+        (Some(_), false) => "←/→ period · esc menu",
+        (Some(_), true) => "←/→ period · esc menu · l log out",
+        (None, false) => "←/→ period · esc menu · `typepper link <github-login>` to be on it",
+        (None, true) => "←/→ period · esc menu · l log in with GitHub to be on it",
     };
     f.render_widget(Line::from(hint.dark_gray()).centered(), help);
 }
@@ -172,10 +174,13 @@ pub fn strip(
     score: f64,
     prompt: &str,
 ) {
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Color::DarkGray)
         .title_bottom(Line::from(" b more ").dark_gray().right_aligned());
+    if me.is_none() && cfg!(target_arch = "wasm32") {
+        block = block.title_bottom(Line::from(" l log in ").dark_gray().left_aligned());
+    }
     let inner = block.inner(area);
     f.render_widget(block, area);
     let Some(b) = b else {
@@ -244,10 +249,10 @@ pub fn strip(
             Some(rank) => (rank - 1, format!("#{rank}?")),
             None => (shown.len(), format!("#{}+", TOP + 1)),
         };
-        // the web can't link yet
-        let you = match me.is_some() || cfg!(target_arch = "wasm32") {
-            true => "you".to_string(),
-            false => "you, if linked".to_string(),
+        let you = match (me, cfg!(target_arch = "wasm32")) {
+            (Some(_), _) => "you".to_string(),
+            (None, false) => "you, if linked".to_string(),
+            (None, true) => "you, if logged in".to_string(),
         };
         shown.insert(
             at.min(shown.len()),

@@ -106,6 +106,8 @@ pub struct App {
     account: Option<String>,
     /// The boards beside the results chart, once opened.
     strip: Option<Boards>,
+    /// A logged-in browser's bests from the server, on their way.
+    synced: Option<Call>,
 }
 
 impl App {
@@ -124,6 +126,13 @@ impl App {
             }),
             None => Screen::Title,
         };
+        let account = online::account();
+        // logged in on the web: bests set in the terminal show here too. In
+        // the background: nothing waits on it, and a failure changes nothing
+        #[cfg(target_arch = "wasm32")]
+        let synced = (!settings.offline && account.is_some()).then(Call::bests);
+        #[cfg(not(target_arch = "wasm32"))]
+        let synced = None;
         App {
             screen,
             menu: Menu::new(now),
@@ -141,8 +150,9 @@ impl App {
             fade: None,
             share: None,
             screens: 0,
-            account: online::account(),
+            account,
             strip: None,
+            synced,
         }
     }
 
@@ -209,6 +219,33 @@ impl App {
             match self.account {
                 Some(_) => self.send_outbox(),
                 None => self.send(body, Vec::new()),
+            }
+            return false;
+        }
+        // the web's l logs in with GitHub (or out): on the title, the boards,
+        // and a finished round
+        #[cfg(target_arch = "wasm32")]
+        if let Key::Char('l') = key
+            && !self.settings.offline
+            && match &self.screen {
+                Screen::Title => !self.menu.pressing(),
+                Screen::Boards(_) => true,
+                Screen::Play(r) => r.test().finished.is_some(),
+                Screen::Watch(_) => false,
+            }
+        {
+            match self.account.take() {
+                Some(_) => {
+                    online::log_out();
+                    // the boards drop the player's own row
+                    if let Some(b) = &mut self.strip {
+                        b.step(0);
+                    }
+                    if let Screen::Boards(b) = &mut self.screen {
+                        b.step(0);
+                    }
+                }
+                None => online::log_in(),
             }
             return false;
         }
@@ -284,6 +321,8 @@ impl App {
             && let Ok(up) = &mut share.state
             && let Some(answer) = up.poll()
         {
+            // a web session can end under it (the answer says so)
+            self.account = online::account();
             share.state = Err(answer.and_then(|text| {
                 online::outbox_settle(&share.outbox, &text);
                 // this round is the last one sent
@@ -303,6 +342,13 @@ impl App {
         }
         if let Some(b) = &mut self.strip {
             b.tick();
+        }
+        if let Some(answer) = self.synced.as_mut().and_then(Call::poll) {
+            self.synced = None;
+            if let Ok(text) = answer {
+                self.bests.merge(&text);
+            }
+            self.account = online::account();
         }
         let mut next = None;
         // demo: take the suggested starting level after a moment
@@ -395,7 +441,7 @@ impl App {
         let now = Instant::now();
         match &self.screen {
             Screen::Title => {
-                menu::draw(f, &self.menu, &self.bests, now);
+                menu::draw(f, &self.menu, &self.bests, self.account.as_deref(), now);
                 if let Some(d) = &self.dialog {
                     menu::dialog(f, d, &self.settings, now);
                 }
