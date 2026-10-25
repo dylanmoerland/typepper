@@ -4,6 +4,8 @@ What changed in each typepper release, newest first.
 
 ## Unreleased
 
+## [0.6.0] - 2026-10-25
+
 - Log in with GitHub in the browser: press l on typepper.com and your rounds there go on the boards as you, the same player as your linked terminal. Bests you set in the terminal show up in the browser too
 - Your rounds, kept: press h on the menu for your last 50 rounds. Watch any of them again, offline too, and find the link of one you shared, or press u to share one you didn't (thanks @prjctimg for the idea!)
 - Watch the best: on the boards, pick a row with ↑/↓ and press enter to watch that round, key by key
