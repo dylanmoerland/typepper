@@ -4,6 +4,8 @@ What changed in each typepper release, newest first.
 
 ## Unreleased
 
+## [0.5.0] - 2026-10-25
+
 - The leaderboard is now on the results screen, beside the chart: press ←/→ to see where your round would land today, this week, this month, this year or all time, and b for the whole board. Linked players see their rank show up by itself. The boards now open on today
 - Upgrade with `typepper upgrade`. It comes with this version, so re-run the installer once to get it (`curl -LsSf https://typepper.com/install.sh | sh`, or the PowerShell line on Windows). After that, one command does it
 - In the terminal, a board nobody has played yet now says so, instead of saying it couldn't reach typepper.com
