@@ -218,6 +218,10 @@ impl App {
             && !matches!(key, Key::Esc)
         {
             let n = p.peppers as usize;
+            // a plate served by this very key: the hover starts on the first
+            if self.pepper.1 != Some(p.served) {
+                self.pepper = (0, Some(p.served));
+            }
             let (hover, _) = &mut self.pepper;
             match key {
                 Key::Left | Key::Up => *hover = (*hover + n - 1) % n,

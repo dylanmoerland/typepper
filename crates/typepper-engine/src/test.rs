@@ -131,6 +131,9 @@ pub const COURSE_SECS: f64 = 30.0;
 pub const PICK_SECS: f64 = 8.0;
 /// THE HOT ONE: this long without a key (once you've typed) is a strike.
 pub const STALL_SECS: f64 = 3.0;
+/// THE HOT ONE: chewing a pepper takes this long, and nothing types meanwhile;
+/// only then do you find out which one it was.
+pub const BITE_SECS: f64 = 1.6;
 /// THE HOT ONE: one more pepper on the plate while you're hot (rank `HOT`+).
 const HOT_BONUS: u8 = 1;
 
@@ -229,6 +232,8 @@ pub struct Test {
     pub plates: u32,
     /// THE HOT ONE: every bite so far (the last one may be the hot one).
     pub bites: Vec<Bite>,
+    /// THE HOT ONE: still chewing the last bite (since when).
+    pub chewing: Option<Instant>,
     /// THE HOT ONE: when the hot one was bitten.
     pub bitten: Option<Instant>,
     /// THE HOT ONE: the round second the next course is served at.
@@ -286,8 +291,8 @@ impl Test {
         if self.finished.is_some() || self.typed.len() >= self.target.len() {
             return;
         }
-        // a plate on the table: nothing types until a pepper is picked
-        if self.plate.is_some() {
+        // a plate on the table, or a mouthful: nothing types
+        if self.plate.is_some() || self.chewing.is_some() {
             return;
         }
         // pursuit, the hot one: a wrong key doesn't move the caret, you have
@@ -373,7 +378,11 @@ impl Test {
 
     /// A wrong key that doesn't move the cursor (lava: no word to type it into).
     pub fn miss(&mut self, now: Instant) {
-        if self.finished.is_some() || self.plate.is_some() || !self.key_down(now) {
+        if self.finished.is_some()
+            || self.plate.is_some()
+            || self.chewing.is_some()
+            || !self.key_down(now)
+        {
             return;
         }
         self.stuck = self.strict();
@@ -417,32 +426,49 @@ impl Test {
         self.finished.is_none() && self.plate.is_some_and(|p| n < p.peppers)
     }
 
-    /// THE HOT ONE: bite pepper `n` off the plate. The hot one ends the round;
-    /// any other clears the strikes and the plate.
+    /// THE HOT ONE: bite pepper `n` off the plate, and chew for `BITE_SECS`
+    /// (see `swallow`): the plate's gone, the strikes with it.
     pub fn pick(&mut self, n: u8, now: Instant) {
         let Some(p) = self.plate.take().filter(|p| n < p.peppers) else {
             return;
         };
-        let hot = n == p.hot;
         self.bites.push(Bite {
             at: now,
             pepper: n,
             peppers: p.peppers,
-            hot,
+            hot: n == p.hot,
         });
+        self.chewing = Some(now);
         self.strikes = 0;
+    }
+
+    /// THE HOT ONE: the bite goes down. The hot one ends the round here; any
+    /// other counts as a plate survived, and the typing goes on.
+    fn swallow(&mut self, now: Instant) {
+        self.chewing = None;
         self.stall_from = Some(now);
-        if hot {
-            self.bitten = Some(now);
-            self.finish(now);
-        } else {
-            self.plates += 1;
+        match self.bites.last().is_some_and(|b| b.hot) {
+            true => {
+                self.bitten = Some(now);
+                self.finish(now);
+            }
+            false => self.plates += 1,
         }
+    }
+
+    /// THE HOT ONE: how far through chewing the last bite, 0..1.
+    pub fn chewed(&self, now: Instant) -> Option<f64> {
+        let since = self.chewing?;
+        Some((now.saturating_duration_since(since).as_secs_f64() / BITE_SECS).min(1.0))
     }
 
     /// THE HOT ONE: seconds until the next course (none while a plate's up).
     pub fn course_in(&self, now: Instant) -> Option<f64> {
-        if !self.hot_one() || self.plate.is_some() || self.finished.is_some() {
+        if !self.hot_one()
+            || self.plate.is_some()
+            || self.chewing.is_some()
+            || self.finished.is_some()
+        {
             return None;
         }
         Some((self.next_course - self.elapsed(now).as_secs_f64()).max(0.0))
@@ -531,6 +557,12 @@ impl Test {
     /// THE HOT ONE's clock: a plate left alone picks itself, the courses come
     /// round, and standing still is a strike.
     fn dinner(&mut self, now: Instant) {
+        if let Some(since) = self.chewing {
+            if now.saturating_duration_since(since).as_secs_f64() >= BITE_SECS {
+                self.swallow(now);
+            }
+            return;
+        }
         match self.plate {
             Some(p) => {
                 if now.saturating_duration_since(p.served).as_secs_f64() >= PICK_SECS {
@@ -1006,21 +1038,36 @@ mod tests {
             "nothing types over a plate"
         );
         assert!(!t.can_pick(PLATE) && t.can_pick(PLATE - 1));
-        // a mild one: back to typing, one pepper fewer next time
+        // a mild one: chewed first (nothing types), then back to typing with
+        // one pepper fewer next time
         let mild = (plate.hot + 1) % PLATE;
         let t2 = t1 + Duration::from_secs(2);
         t.pick(mild, t2);
         assert!(t.plate.is_none() && t.finished.is_none());
-        assert_eq!((t.plates, t.strikes, t.bites.len()), (1, 0, 1));
-        assert!(!t.bites[0].hot);
-        type_str(&mut t, "xxx", t2);
+        assert_eq!((t.plates, t.strikes, t.bites.len()), (0, 0, 1));
+        assert!(!t.bites[0].hot && t.chewing == Some(t2));
+        assert_eq!(
+            t.chewed(t2 + Duration::from_secs_f64(BITE_SECS / 2.0)),
+            Some(0.5)
+        );
+        type_str(&mut t, "b", t2);
+        assert_eq!(t.typed.len(), 4, "chewing: nothing types");
+        t.tick(t2 + Duration::from_secs_f64(BITE_SECS));
+        assert_eq!((t.chewing, t.plates), (None, 1));
+        let t3 = t2 + Duration::from_secs(2);
+        type_str(&mut t, "xxx", t3);
         let plate = t.plate.expect("a second plate");
         assert_eq!(plate.peppers, PLATE - 1);
-        t.pick(plate.hot, t2);
-        assert_eq!((t.bitten, t.finished), (Some(t2), Some(t2)));
-        assert!(t.bites[1].hot);
+        t.pick(plate.hot, t3);
+        assert!(
+            t.bites[1].hot && t.finished.is_none(),
+            "not known until it's down"
+        );
+        let t4 = t3 + Duration::from_secs_f64(BITE_SECS);
+        t.tick(t4);
+        assert_eq!((t.bitten, t.finished), (Some(t4), Some(t4)));
         assert_eq!(t.words, 1);
-        t.type_char('a', t2);
+        t.type_char('a', t4);
         assert_eq!(t.typed.len(), 4, "done typing");
     }
 
@@ -1047,14 +1094,13 @@ mod tests {
         t.tick(at(COURSE_SECS + PICK_SECS - 0.1));
         assert!(t.plate.is_some());
         t.tick(at(COURSE_SECS + PICK_SECS));
-        assert!(t.plate.is_none());
+        assert!(t.plate.is_none() && t.chewing.is_some());
         assert_eq!(t.bites.len(), 1);
+        let down = at(COURSE_SECS + PICK_SECS + BITE_SECS);
+        t.tick(down);
         if t.finished.is_none() {
             assert_eq!(t.plates, 1);
-            assert_eq!(
-                t.course_in(at(COURSE_SECS + PICK_SECS)),
-                Some(COURSE_SECS - PICK_SECS)
-            );
+            assert_eq!(t.course_in(down), Some(COURSE_SECS - PICK_SECS - BITE_SECS));
         }
     }
 

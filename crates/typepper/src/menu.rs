@@ -1129,7 +1129,8 @@ fn pursuit(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
 fn hot_one(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
     const PLATE: [&str; 2] = ["╭─────────────╮", "╰─────────────╯"];
     let (left, right) = (area.left() as i32, area.right() as i32);
-    let y = focus.bottom() as i32 + 1;
+    // the belt runs just under the cards, like pursuit's road
+    let y = focus.bottom() as i32;
     if y + 1 >= area.bottom() as i32 {
         return;
     }

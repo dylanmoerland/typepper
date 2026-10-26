@@ -23,8 +23,6 @@ const CALLOUT: Duration = Duration::from_millis(1200);
 const MISS_RED: Color = Color::Rgb(200, 30, 30);
 /// THE HOT ONE: a strike flashes the edges this long.
 const STRUCK: f64 = 0.35;
-/// THE HOT ONE: the peppers on a plate, all the same innocent green.
-const MILD_GREEN: (f64, f64, f64) = (70.0, 170.0, 60.0);
 
 const DIGITS: [[&str; 5]; 10] = [
     ["███", "█ █", "█ █", "█ █", "███"],
@@ -119,47 +117,60 @@ pub fn draw(
             let k = t.strikes.max(1) as f64 / STRIKES as f64;
             fx::vignette(f.buffer_mut(), (1.0 - ago / STRUCK) * (0.3 + 0.5 * k));
         }
-        if t.plate.is_some() {
+        if t.plate.is_some() || t.chewing.is_some() {
             plate(f, t, pepper, now);
         }
     }
     None
 }
 
-/// THE HOT ONE's plate: the peppers in a row, all alike, one of them the hot
-/// one. `pepper` is the one hovered (←/→); the numbers under them pick too.
+/// THE HOT ONE's plate: one pepper at a time, big, each its own color;
+/// ←/→ turns the plate to the next, enter (or its number) bites it. Then
+/// it's chewed, bite by bite, and only once it's down do you know.
+/// `pepper` is the one hovered (none while watching someone else's round).
 fn plate(f: &mut Frame, t: &Test, pepper: Option<usize>, now: Instant) {
-    let Some(p) = t.plate else { return };
+    let chewing = t.chewed(now);
+    let (n, shown, age) = match (t.plate, chewing, t.bites.last()) {
+        (Some(p), _, _) => (
+            p.peppers as usize,
+            pepper.unwrap_or(0),
+            t.plate_age(now).unwrap_or(0.0),
+        ),
+        (None, Some(_), Some(bite)) => (
+            bite.peppers as usize,
+            bite.pepper as usize,
+            since(Some(bite.at), now).as_secs_f64() + PICK_SECS,
+        ),
+        _ => return,
+    };
     let area = f.area();
-    let age = t.plate_age(now).unwrap_or(0.0);
     let k = (age / 0.18).min(1.0);
     menu::dim(f.buffer_mut(), 0.6 * k);
-    let n = p.peppers as usize;
-    // each pepper gets a slot; phones get narrower ones
-    let slot = ((area.width.saturating_sub(6)) / n as u16).clamp(5, 12);
-    let title = match p.why {
-        Served::Strikes => format!(" {STRIKES} STRIKES · PICK A PEPPER "),
-        Served::Course => format!(" COURSE {} · PICK A PEPPER ", t.plates + 1),
+    let (r, g, b) = menu::HOT_PINK;
+    let pink = Color::Rgb(r, g, b);
+    let title = match (t.plate.map(|p| p.why), chewing) {
+        (_, Some(_)) => " CHEWING… ".to_string(),
+        (Some(Served::Strikes), _) => format!(" {STRIKES} STRIKES · PICK A PEPPER "),
+        _ => format!(" COURSE {} · PICK A PEPPER ", t.plates + 1),
     };
-    let hint = match (touch(), pepper.is_some(), n) {
-        (_, false, _) => "picking…".to_string(),
-        (true, true, _) => format!("type 1-{n} to bite"),
-        (false, true, 1) => "enter bites it".to_string(),
-        (false, true, _) => format!("←/→ pick · enter bite · or 1-{n}"),
+    let hint = match (chewing.is_some(), touch(), pepper.is_some(), n) {
+        (true, ..) => "nom nom nom".to_string(),
+        (_, _, false, _) => "picking…".to_string(),
+        (_, true, true, _) => format!("type 1-{n} to bite"),
+        (_, false, true, 1) => "one left · enter bites it".to_string(),
+        (_, false, true, _) => format!("←/→ turn the plate · enter bite · or 1-{n}"),
     };
-    let w = (slot * n as u16 + 4)
+    let w = 56u16
         .max(title.chars().count() as u16 + 2)
         .max(hint.chars().count() as u16 + 4)
         .min(area.width);
-    let h = 14.min(area.height);
+    let h = 18.min(area.height);
     let rect = Rect::new(
         area.x + (area.width - w) / 2,
         area.y + (area.height - h) / 2,
         w,
         h,
     );
-    let (r, g, b) = menu::HOT_PINK;
-    let pink = Color::Rgb(r, g, b);
     let block = Block::bordered()
         .border_type(BorderType::Thick)
         .border_style(pink)
@@ -168,69 +179,67 @@ fn plate(f: &mut Frame, t: &Test, pepper: Option<usize>, now: Instant) {
     f.render_widget(Clear, rect);
     f.render_widget(block, rect);
     let buf = f.buffer_mut();
-    let [_, stage, labels, _, left, _] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(7),
-        Constraint::Length(1),
+    let [stage, labels, _, fuse_row, hint_row] = Layout::vertical([
         Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
     ])
     .areas(inner);
-    let x0 = inner.x + (inner.width - slot * n as u16) / 2;
+    // the pepper on show: the menu's jalapeño, in this pepper's color; a
+    // bite takes a piece off it, and the stem sinks with it
+    let mut shape = pepper::JALAPENO;
+    let (cr, cg, cb) = PLATE_COLORS[shown % PLATE_COLORS.len()];
+    shape.color = (cr as f64, cg as f64, cb as f64);
+    if let Some(c) = chewing {
+        let bites = (c * 4.0).floor() / 4.0;
+        shape.len *= 1.0 - 0.8 * bites;
+        shape.girth *= 1.0 - 0.3 * bites;
+    }
+    let pose = pepper::Pose {
+        spin: age * 1.2 + shown as f64 * 2.0,
+        tilt: 0.35 + 0.12 * (age * 0.9).sin(),
+    };
+    pepper::draw(buf, stage, &shape, &pose);
+    // the plate: one dot per pepper, each its color, the shown one named
+    let mut spans: Vec<Span> = Vec::new();
     for i in 0..n {
-        let cell = Rect::new(x0 + slot * i as u16, stage.y, slot, stage.height);
-        let hover = pepper == Some(i);
-        // every pepper on the plate looks innocent; the shapes vary so the
-        // row isn't a lineup, but the hot one looks like all the others
-        let which = fx::hash(
-            t.plates as u64,
-            i as u64,
-            p.served.elapsed().as_secs() / 3600,
-        ) as usize;
-        let mut shape = pepper::RANK_SHAPES[which % 5];
-        shape.color = match hover {
-            true => (
-                MILD_GREEN.0 + 60.0,
-                MILD_GREEN.1 + 50.0,
-                MILD_GREEN.2 + 40.0,
-            ),
-            false => MILD_GREEN,
-        };
-        let pose = pepper::Pose {
-            spin: age * 0.8 + i as f64 * 1.3 + if hover { age * 2.0 } else { 0.0 },
-            tilt: 0.3,
-        };
-        pepper::draw(buf, cell, &shape, &pose);
-        let label = format!("{}", i + 1);
-        let style = match hover {
-            true => Style::new().black().bg(pink).bold(),
-            false => Style::new().dark_gray(),
-        };
-        let lx = cell.x + cell.width / 2;
-        buf[(lx, labels.y)].set_symbol(&label).set_style(style);
-        if hover {
-            buf[(lx, labels.y)].set_symbol(&label);
-            if lx > 0 {
-                buf[(lx - 1, labels.y)].set_symbol(" ").set_style(style);
-            }
-            if lx + 1 < buf.area.right() {
-                buf[(lx + 1, labels.y)].set_symbol(" ").set_style(style);
-            }
+        let (cr, cg, cb) = PLATE_COLORS[i % PLATE_COLORS.len()];
+        let c = Color::Rgb(cr, cg, cb);
+        if i == shown {
+            spans.push(format!(" [{}] ", i + 1).fg(c).bold());
+        } else {
+            spans.push(format!("  {}  ", i + 1).fg(c));
         }
     }
-    // the plate waits only so long: a fuse burning down the bottom row
-    let fuse = (1.0 - age / PICK_SECS).clamp(0.0, 1.0);
-    let lit = (left.width as f64 * fuse).round() as usize;
-    let fuse_line = Line::from(vec![
+    Line::from(spans).centered().render(labels, buf);
+    // the plate waits only so long: a fuse burning down; chewing fills it back
+    let fuse = match chewing {
+        Some(c) => c,
+        None => (1.0 - age / PICK_SECS).clamp(0.0, 1.0),
+    };
+    let lit = (fuse_row.width as f64 * fuse).round() as usize;
+    Line::from(vec![
         Span::styled("━".repeat(lit), fx::fire(0.5 + 0.5 * fuse)),
-        Span::styled("╌".repeat(left.width as usize - lit), Color::DarkGray),
-    ]);
-    fuse_line.render(left, buf);
+        Span::styled("╌".repeat(fuse_row.width as usize - lit), Color::DarkGray),
+    ])
+    .render(fuse_row, buf);
     Line::from(hint.dark_gray())
         .centered()
-        .render(Rect::new(inner.x, left.y + 1, inner.width, 1), buf);
+        .render(hint_row, buf);
 }
+
+/// The peppers on a plate, by their place on it: all innocent colors, no
+/// hotter-looking than the next.
+const PLATE_COLORS: [Rgb; 6] = [
+    (60, 190, 70),
+    (245, 200, 40),
+    (255, 120, 40),
+    (220, 50, 50),
+    (150, 80, 220),
+    (40, 190, 200),
+];
 
 /// Blitz's last 5 seconds: time since the clock last ticked over.
 fn last_seconds(t: &Test, now: Instant) -> Option<f64> {
@@ -1064,6 +1073,16 @@ mod tests {
                     );
                 }
                 assert!(screen.contains("PICK A PEPPER"), "{w} wide");
+                t.pick(0, now);
+                term.draw(|f| {
+                    draw(f, &t, None, None, false, Some(0));
+                })
+                .unwrap();
+                let screen = term.backend().to_string();
+                assert!(
+                    screen.contains("CHEWING") && screen.contains("[1]"),
+                    "{w} wide"
+                );
             }
         }
         let mut t = Test::new(Mode::HotOne, &["hot"; 50]);

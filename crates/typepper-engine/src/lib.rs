@@ -303,8 +303,12 @@ impl Round {
         }
         let now = self.at(at_ms);
         match (&mut self.game, input) {
-            // a plate on the table: the keys wait, and don't go in the log
-            (Game::Test(t), Input::Char(_) | Input::Backspace) if t.plate.is_some() => return,
+            // a plate on the table, or a mouthful: the keys wait, and don't go in the log
+            (Game::Test(t), Input::Char(_) | Input::Backspace)
+                if t.plate.is_some() || t.chewing.is_some() =>
+            {
+                return;
+            }
             (Game::Test(t), Input::Char(c)) => t.type_char(c, now),
             (Game::Test(t), Input::Backspace) => t.backspace(now),
             (Game::Test(t), Input::End)
@@ -636,7 +640,7 @@ mod tests {
         };
         let out = simulate(setup, &[]).expect("the dinner ends by itself");
         assert_eq!(out.score, Some(0.0));
-        let longest = (PLATE as u32 + 1) * (COURSE_SECS + PICK_SECS) as u32 * 1000;
+        let longest = (PLATE as u32 + 1) * (COURSE_SECS + PICK_SECS + BITE_SECS) as u32 * 1000;
         assert!(out.ms <= longest, "{} ms", out.ms);
         // and a pick that isn't on the table isn't a thing
         let mut r = Round::new(setup);
