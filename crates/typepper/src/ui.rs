@@ -9,7 +9,7 @@ use ratatui::widgets::{
 };
 
 use crate::best::{self, Outcome};
-use crate::engine::{FUEL, HOT, LEAD_MAX, Mode, RANKS, Test, scoville};
+use crate::engine::{FUEL, HOT, LEAD_MAX, Mode, PICK_SECS, RANKS, STRIKES, Served, Test, scoville};
 use crate::fx::{
     self, POLICE, RANK_RGB, Rgb, SIREN_RED, WHITE, anim_clock, hash, hsv, lerp, rank_color, rgb,
     since,
@@ -21,6 +21,10 @@ const FLASH: Duration = Duration::from_millis(120);
 const SHAKE: Duration = Duration::from_millis(250);
 const CALLOUT: Duration = Duration::from_millis(1200);
 const MISS_RED: Color = Color::Rgb(200, 30, 30);
+/// THE HOT ONE: a strike flashes the edges this long.
+const STRUCK: f64 = 0.35;
+/// THE HOT ONE: the peppers on a plate, all the same innocent green.
+const MILD_GREEN: (f64, f64, f64) = (70.0, 170.0, 60.0);
 
 const DIGITS: [[&str; 5]; 10] = [
     ["███", "█ █", "█ █", "█ █", "███"],
@@ -49,12 +53,15 @@ pub fn column(area: Rect) -> Rect {
 /// `share`: the results screen's word on sharing the round, if any.
 /// `strip`: room for the boards beside the results chart; where it went
 /// (once the chart's in, on a screen wide enough).
+/// `pepper`: THE HOT ONE, the pepper the player is hovering on a plate
+/// (none while watching someone else's round).
 pub fn draw(
     f: &mut Frame,
     t: &Test,
     outcome: Option<Outcome>,
     share: Option<&str>,
     strip: bool,
+    pepper: Option<usize>,
 ) -> Option<Rect> {
     let now = Instant::now();
     let col = column(f.area());
@@ -105,7 +112,124 @@ pub fn draw(
             (1.0 - bust / 2.0) * (0.5 + 0.5 * beat),
         );
     }
+    // the hot one: a strike flashes the edges, harder the closer to a plate
+    if t.mode == Mode::HotOne {
+        let ago = since(t.struck, now).as_secs_f64();
+        if ago < STRUCK {
+            let k = t.strikes.max(1) as f64 / STRIKES as f64;
+            fx::vignette(f.buffer_mut(), (1.0 - ago / STRUCK) * (0.3 + 0.5 * k));
+        }
+        if t.plate.is_some() {
+            plate(f, t, pepper, now);
+        }
+    }
     None
+}
+
+/// THE HOT ONE's plate: the peppers in a row, all alike, one of them the hot
+/// one. `pepper` is the one hovered (←/→); the numbers under them pick too.
+fn plate(f: &mut Frame, t: &Test, pepper: Option<usize>, now: Instant) {
+    let Some(p) = t.plate else { return };
+    let area = f.area();
+    let age = t.plate_age(now).unwrap_or(0.0);
+    let k = (age / 0.18).min(1.0);
+    menu::dim(f.buffer_mut(), 0.6 * k);
+    let n = p.peppers as usize;
+    // each pepper gets a slot; phones get narrower ones
+    let slot = ((area.width.saturating_sub(6)) / n as u16).clamp(5, 12);
+    let title = match p.why {
+        Served::Strikes => format!(" {STRIKES} STRIKES · PICK A PEPPER "),
+        Served::Course => format!(" COURSE {} · PICK A PEPPER ", t.plates + 1),
+    };
+    let hint = match (touch(), pepper.is_some(), n) {
+        (_, false, _) => "picking…".to_string(),
+        (true, true, _) => format!("type 1-{n} to bite"),
+        (false, true, 1) => "enter bites it".to_string(),
+        (false, true, _) => format!("←/→ pick · enter bite · or 1-{n}"),
+    };
+    let w = (slot * n as u16 + 4)
+        .max(title.chars().count() as u16 + 2)
+        .max(hint.chars().count() as u16 + 4)
+        .min(area.width);
+    let h = 14.min(area.height);
+    let rect = Rect::new(
+        area.x + (area.width - w) / 2,
+        area.y + (area.height - h) / 2,
+        w,
+        h,
+    );
+    let (r, g, b) = menu::HOT_PINK;
+    let pink = Color::Rgb(r, g, b);
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(pink)
+        .title(Line::from(title.bold()).centered());
+    let inner = block.inner(rect);
+    f.render_widget(Clear, rect);
+    f.render_widget(block, rect);
+    let buf = f.buffer_mut();
+    let [_, stage, labels, _, left, _] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(7),
+        Constraint::Length(1),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    let x0 = inner.x + (inner.width - slot * n as u16) / 2;
+    for i in 0..n {
+        let cell = Rect::new(x0 + slot * i as u16, stage.y, slot, stage.height);
+        let hover = pepper == Some(i);
+        // every pepper on the plate looks innocent; the shapes vary so the
+        // row isn't a lineup, but the hot one looks like all the others
+        let which = fx::hash(
+            t.plates as u64,
+            i as u64,
+            p.served.elapsed().as_secs() / 3600,
+        ) as usize;
+        let mut shape = pepper::RANK_SHAPES[which % 5];
+        shape.color = match hover {
+            true => (
+                MILD_GREEN.0 + 60.0,
+                MILD_GREEN.1 + 50.0,
+                MILD_GREEN.2 + 40.0,
+            ),
+            false => MILD_GREEN,
+        };
+        let pose = pepper::Pose {
+            spin: age * 0.8 + i as f64 * 1.3 + if hover { age * 2.0 } else { 0.0 },
+            tilt: 0.3,
+        };
+        pepper::draw(buf, cell, &shape, &pose);
+        let label = format!("{}", i + 1);
+        let style = match hover {
+            true => Style::new().black().bg(pink).bold(),
+            false => Style::new().dark_gray(),
+        };
+        let lx = cell.x + cell.width / 2;
+        buf[(lx, labels.y)].set_symbol(&label).set_style(style);
+        if hover {
+            buf[(lx, labels.y)].set_symbol(&label);
+            if lx > 0 {
+                buf[(lx - 1, labels.y)].set_symbol(" ").set_style(style);
+            }
+            if lx + 1 < buf.area.right() {
+                buf[(lx + 1, labels.y)].set_symbol(" ").set_style(style);
+            }
+        }
+    }
+    // the plate waits only so long: a fuse burning down the bottom row
+    let fuse = (1.0 - age / PICK_SECS).clamp(0.0, 1.0);
+    let lit = (left.width as f64 * fuse).round() as usize;
+    let fuse_line = Line::from(vec![
+        Span::styled("━".repeat(lit), fx::fire(0.5 + 0.5 * fuse)),
+        Span::styled("╌".repeat(left.width as usize - lit), Color::DarkGray),
+    ]);
+    fuse_line.render(left, buf);
+    Line::from(hint.dark_gray())
+        .centered()
+        .render(Rect::new(inner.x, left.y + 1, inner.width, 1), buf);
 }
 
 /// Blitz's last 5 seconds: time since the clock last ticked over.
@@ -205,6 +329,7 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
             Mode::Zen | Mode::Lava { .. } => format!("{} words", t.words).yellow(),
             Mode::Survival { .. } => fuel_gauge(t, fx::fuel_beat(t, now)),
             Mode::Pursuit { .. } => lead_gauge(t, fx::siren_beat(t, now)),
+            Mode::HotOne => strikes_gauge(t, now),
         };
         let stats = Line::from(vec![
             progress.bold(),
@@ -266,7 +391,12 @@ fn typing(f: &mut Frame, panel: Rect, help: Rect, t: &Test, now: Instant) -> (Te
         Line::from(""),
         Line::from(RANKS[t.rank].name).fg(color).bold(),
     ];
-    if let Some((n, at)) = t.broke
+    let bite = t.bites.last().filter(|b| since(Some(b.at), now) < CALLOUT);
+    if let Some(b) = bite.filter(|b| !b.hot) {
+        let fresh = since(Some(b.at), now) < Duration::from_millis(150);
+        let c = if fresh { Color::White } else { rank_color(2) };
+        rank_lines.push(Line::from("MILD · PHEW").fg(c).bold());
+    } else if let Some((n, at)) = t.broke
         && since(Some(at), now) < CALLOUT
     {
         rank_lines.push(Line::from(format!("COMBO BROKEN ×{n}")).red().bold());
@@ -394,6 +524,29 @@ fn lead_gauge(t: &Test, beat: f64) -> Span<'static> {
         _ => lerp(SIREN_RED, WHITE, 0.7 * beat),
     };
     gauge(t.level(), k, c)
+}
+
+/// THE HOT ONE: the strikes so far ("●●○"), hotter each one, and when the
+/// next course is served; plates survived beside it.
+fn strikes_gauge(t: &Test, now: Instant) -> Span<'static> {
+    let n = (t.strikes as usize).min(STRIKES as usize);
+    let dots = format!("{}{}", "●".repeat(n), "○".repeat(STRIKES as usize - n));
+    let text = match t.course_in(now) {
+        Some(secs) => format!("{dots}  course in {}s", secs.ceil() as u32),
+        None => format!("{dots}  a plate's on the table"),
+    };
+    let text = match t.plates {
+        0 => text,
+        1 => format!("{text}  ·  1 plate down"),
+        p => format!("{text}  ·  {p} plates down"),
+    };
+    let c = match n {
+        0 => Color::Yellow,
+        1 => rank_color(3),
+        2 => rank_color(4),
+        _ => rank_color(5),
+    };
+    Span::styled(text, c)
 }
 
 /// "LV3 ▰▰▰▰▱▱▱▱▱▱": the level and ten ticks filled to `k` (0..1).
@@ -591,9 +744,10 @@ fn results(
         &pose,
     );
 
-    let label_line = match t.busted {
-        Some(_) => busted_line(t, now, secs),
-        None => Line::from("SCORE").dark_gray(),
+    let label_line = match (t.busted, t.bitten) {
+        (Some(_), _) => busted_line(t, now, secs),
+        (_, Some(_)) => bitten_line(secs),
+        _ => Line::from("SCORE").dark_gray(),
     };
     f.render_widget(label_line.centered(), label);
     let shown = (t.score as f64 * ease(0.0, 0.8)).round() as u64;
@@ -745,6 +899,14 @@ fn results(
     };
     let line = match (narrow, t.mode) {
         (true, _) => format!("{mode} · {took:.1}s · {} slips", t.errors),
+        // the hot one: wrong keys never land either, and the plates count
+        (false, Mode::HotOne) => format!(
+            "{mode} · {took:.1}s · {} correct · {} slips · {} plate{} survived",
+            t.correct(),
+            t.errors,
+            t.plates,
+            if t.plates == 1 { "" } else { "s" }
+        ),
         // pursuit: wrong keys never land, they're all slips
         (false, Mode::Pursuit { .. }) => format!(
             "{mode} · {took:.1}s · {} correct · {} slips",
@@ -803,6 +965,27 @@ fn busted_line(t: &Test, now: Instant, secs: f64) -> Line<'static> {
     ])
 }
 
+/// "◗  THE HOT ONE · SCORE  ◗": it lands white-hot, then throbs hot pink.
+fn bitten_line(secs: f64) -> Line<'static> {
+    let (r, g, b) = menu::HOT_PINK;
+    let pink = Color::Rgb(r, g, b);
+    let word = match secs < 0.15 {
+        true => Color::White,
+        false if calm() => pink,
+        false => lerp(
+            (255, 255, 255),
+            menu::HOT_PINK,
+            0.6 + 0.4 * (secs * 6.0).sin(),
+        ),
+    };
+    Line::from(vec![
+        Span::styled("◗", Style::new().fg(pink)),
+        Span::styled("  THE HOT ONE", Style::new().fg(word).bold()),
+        " · SCORE  ".dark_gray(),
+        Span::styled("◗", Style::new().fg(pink)),
+    ])
+}
+
 /// 5-row block glyphs: digits plus the letters of the logo.
 pub fn glyph(c: char) -> Option<[&'static str; 5]> {
     Some(match c {
@@ -848,6 +1031,47 @@ mod tests {
     fn wraps_after_spaces() {
         let text: Vec<char> = "aa bb cc dddddddd".chars().collect();
         assert_eq!(wrap(&text, 6), vec![(0, 6), (6, 9), (9, 15), (15, 17)]);
+    }
+
+    /// THE HOT ONE's plate draws at phone and desktop widths, every pepper
+    /// numbered, the hovered one marked; the gauge counts the strikes.
+    #[test]
+    fn the_plate_fits_any_width_and_numbers_its_peppers() {
+        let now = Instant::now();
+        for w in [36u16, 60, 100] {
+            for peppers in [1u8, 5, 6] {
+                let mut t = Test::new(Mode::HotOne, &["hot", "one"].repeat(40));
+                t.started = Some(now);
+                t.plate = Some(crate::engine::Plate {
+                    served: now,
+                    why: Served::Course,
+                    peppers,
+                    hot: 0,
+                });
+                let mut term = Terminal::new(TestBackend::new(w, 30)).unwrap();
+                term.draw(|f| {
+                    draw(f, &t, None, None, false, Some(peppers as usize - 1));
+                })
+                .unwrap();
+                let screen = term.backend().to_string();
+                if std::env::var_os("TYPEPPER_SHOW").is_some() {
+                    println!("{screen}");
+                }
+                for i in 1..=peppers {
+                    assert!(
+                        screen.contains(&i.to_string()),
+                        "{w} wide, {peppers} peppers: {i}"
+                    );
+                }
+                assert!(screen.contains("PICK A PEPPER"), "{w} wide");
+            }
+        }
+        let mut t = Test::new(Mode::HotOne, &["hot"; 50]);
+        t.started = Some(now);
+        t.strikes = 2;
+        assert!(strikes_gauge(&t, now).content.starts_with("●●○"));
+        t.plates = 2;
+        assert!(strikes_gauge(&t, now).content.ends_with("2 plates down"));
     }
 
     /// Pursuit, phone and desktop widths: wherever the cop is, its car rides

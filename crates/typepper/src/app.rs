@@ -114,6 +114,9 @@ pub struct App {
     synced: Option<Call>,
     /// The results screen's round in the history (`history::Round::at`).
     played: Option<u64>,
+    /// THE HOT ONE: the pepper hovered on the plate, and which plate that was
+    /// (a new plate starts back at the first).
+    pepper: (usize, Option<Instant>),
 }
 
 impl App {
@@ -153,6 +156,7 @@ impl App {
             strip: None,
             synced,
             played: None,
+            pepper: (0, None),
         }
     }
 
@@ -204,6 +208,28 @@ impl App {
             self.go(practice(mode), now);
             if instant {
                 self.fade = None;
+            }
+            return false;
+        }
+        // the hot one, a plate on the table: ←/→ hover a pepper, enter (or
+        // its number) bites it; nothing else gets through but esc
+        if let Screen::Play(r) = &mut self.screen
+            && let Some(p) = r.test().plate
+            && !matches!(key, Key::Esc)
+        {
+            let n = p.peppers as usize;
+            let (hover, _) = &mut self.pepper;
+            match key {
+                Key::Left | Key::Up => *hover = (*hover + n - 1) % n,
+                Key::Right | Key::Down => *hover = (*hover + 1) % n,
+                Key::Enter | Key::Char(' ') => r.input(r.ms(now), Input::Pick(*hover as u8)),
+                Key::Char(c) if c.is_ascii_digit() && c != '0' => {
+                    let i = c as usize - '1' as usize;
+                    if i < n {
+                        r.input(r.ms(now), Input::Pick(i as u8));
+                    }
+                }
+                _ => {}
             }
             return false;
         }
@@ -448,6 +474,13 @@ impl App {
                 r.advance(r.ms(now));
             }
         }
+        // a new plate: the hover starts back at the first pepper
+        if let Some(t) = self.screen.test() {
+            let served = t.plate.map(|p| p.served);
+            if served != self.pepper.1 {
+                self.pepper = (0, served);
+            }
+        }
         // finished: dissolve into results, and score it (demo runs don't count)
         if let Some(r) = self.screen.round()
             && let Some(round) = r.result()
@@ -511,7 +544,12 @@ impl App {
                 _ => {
                     let hint = self.share_hint();
                     let strip = self.strip_shown();
-                    if let Some(area) = ui::draw(f, r.test(), self.outcome, hint.as_deref(), strip)
+                    let hover = match self.screen {
+                        Screen::Play(_) => Some(self.pepper.0),
+                        _ => None,
+                    };
+                    if let Some(area) =
+                        ui::draw(f, r.test(), self.outcome, hint.as_deref(), strip, hover)
                     {
                         // a linked round on its way up: its board comes after it
                         let saving = self.account.is_some()
@@ -740,13 +778,22 @@ impl Bot {
             let input = match &r.game {
                 // FLOOR IS LAVA: finishes the word it's on, or starts the lowest one
                 Game::Lava(l) => l.next_char().map(Input::Char),
+                // THE HOT ONE: a plate on the table gets a moment's thought, then a bite
+                Game::Test(t) if t.plate.is_some() => {
+                    let p = t.plate.unwrap();
+                    if r.ms(at) < r.ms(p.served) + 900 {
+                        self.next = p.served + Duration::from_millis(900);
+                        continue;
+                    }
+                    Some(Input::Pick(rng.random_range(0..p.peppers)))
+                }
                 Game::Test(_) if self.fixing => {
                     self.fixing = false;
                     Some(Input::Backspace)
                 }
                 Game::Test(t) if rng.random_bool(self.typos) => {
-                    // pursuit: a miss stays put, so there's nothing to take back
-                    self.fixing = !matches!(t.mode, Mode::Pursuit { .. });
+                    // pursuit, the hot one: a miss stays put, nothing to take back
+                    self.fixing = !matches!(t.mode, Mode::Pursuit { .. } | Mode::HotOne);
                     Some(Input::Char('#'))
                 }
                 Game::Test(t) => t.target.get(t.typed.len()).map(|&c| Input::Char(c)),

@@ -26,7 +26,7 @@ pub struct Group {
     modes: &'static [Mode],
 }
 
-pub const MENU: [Group; 6] = [
+pub const MENU: [Group; 7] = [
     Group {
         name: "SPRINT",
         blurb: "type the words, fast as you can",
@@ -79,7 +79,17 @@ pub const MENU: [Group; 6] = [
         scene: pursuit,
         modes: &[Mode::Pursuit { start_level: 1 }],
     },
+    Group {
+        name: "THE HOT ONE",
+        blurb: "three slips and a plate comes round · bite the hot one and you're done",
+        color: HOT_PINK,
+        scene: hot_one,
+        modes: &[Mode::HotOne],
+    },
 ];
+
+/// THE HOT ONE's color: a chili red gone pink, like nothing else on the carousel.
+pub const HOT_PINK: Rgb = (255, 60, 130);
 
 pub fn group(m: Mode) -> &'static Group {
     &MENU[slot(m)]
@@ -94,6 +104,7 @@ fn slot(m: Mode) -> usize {
         Mode::Survival { .. } => 3,
         Mode::Lava { .. } => 4,
         Mode::Pursuit { .. } => 5,
+        Mode::HotOne => 6,
     }
 }
 
@@ -145,7 +156,7 @@ impl Menu {
             target: 1,
             from: 1.0,
             at: now,
-            len: [1, 1, 0, 0, 0, 0],
+            len: [1, 1, 0, 0, 0, 0, 0],
             start: [0; MENU.len()],
             chip: (0, None),
             pressed: None,
@@ -330,7 +341,7 @@ fn wrapped_rows(text: &str, width: usize) -> u16 {
 }
 
 /// Fade everything already drawn toward the page, `k` 0..1 (behind a dialog).
-fn dim(buf: &mut Buffer, k: f64) {
+pub fn dim(buf: &mut Buffer, k: f64) {
     let page = page_rgb();
     for cell in buf.content.iter_mut() {
         if let Color::Rgb(r, g, b) = cell.fg {
@@ -1112,6 +1123,48 @@ fn pursuit(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
     }
 }
 
+/// THE HOT ONE: a conveyor of plates slides along under the cards, five
+/// peppers on each; now and then one of them glows, and you can't tell
+/// which until it does.
+fn hot_one(buf: &mut Buffer, area: Rect, focus: Rect, secs: f64, w: f64) {
+    const PLATE: [&str; 2] = ["╭─────────────╮", "╰─────────────╯"];
+    let (left, right) = (area.left() as i32, area.right() as i32);
+    let y = focus.bottom() as i32 + 1;
+    if y + 1 >= area.bottom() as i32 {
+        return;
+    }
+    let span = area.width as f64 + 40.0;
+    let n = (span / 20.0).ceil() as i64;
+    for k in 0..n {
+        if !lane_on(hash(k as u64, 71, 0), w) {
+            continue;
+        }
+        // right to left, wrapping, each plate 20 cells apart
+        let x = right + 20 - ((secs * 9.0 + k as f64 * 20.0).rem_euclid(span)) as i32;
+        let china = (150, 150, 160);
+        for (dy, row) in PLATE.iter().enumerate() {
+            for (j, ch) in row.chars().enumerate() {
+                let mut utf8 = [0; 4];
+                let sym = ch.encode_utf8(&mut utf8);
+                dab(buf, x + j as i32, y + dy as i32, sym, china, 0.5 * w);
+            }
+        }
+        // the hot one glows for a moment, on one plate at a time
+        let lit = ((secs * 0.7) as i64 + k).rem_euclid(5) as usize;
+        let glow = 0.5 + 0.5 * (secs * 5.0).sin();
+        for i in 0..5 {
+            let c = match i == lit {
+                true => mix((60, 160, 60), HOT_PINK, glow),
+                false => (60, 160, 60),
+            };
+            let px = x + 2 + i as i32 * 3;
+            if px > left && px < right {
+                dab(buf, px, y, "◗", c, 0.85 * w);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1149,13 +1202,11 @@ mod tests {
         assert_eq!((m.sel(), m.mode()), (1, Mode::Time(30)));
         m.swipe(-1, t0);
         m.swipe(-1, t0);
-        assert_eq!(m.sel(), 5, "wraps past the first card");
+        assert_eq!(m.sel(), 6, "wraps past the first card");
         m.length(1, t0);
-        assert_eq!(
-            m.mode(),
-            Mode::Pursuit { start_level: 1 },
-            "single-length modes stay put"
-        );
+        assert_eq!(m.mode(), Mode::HotOne, "single-length modes stay put");
+        m.swipe(-1, t0);
+        assert_eq!(m.mode(), Mode::Pursuit { start_level: 1 });
         m.swipe(-1, t0);
         assert_eq!(
             m.mode(),
@@ -1173,11 +1224,12 @@ mod tests {
             }
         );
         let done = t0 + Duration::from_secs(1);
-        assert_eq!(m.scroll(done), -2.0);
+        assert_eq!(m.scroll(done), -3.0);
         assert!(
-            m.scroll(t0 + Duration::from_millis(200)) < -2.0,
+            m.scroll(t0 + Duration::from_millis(200)) < -3.0,
             "overshoots"
         );
+        m.swipe(1, done);
         m.swipe(1, done);
         m.swipe(1, done);
         m.length(-1, done);
