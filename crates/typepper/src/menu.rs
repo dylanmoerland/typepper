@@ -436,6 +436,116 @@ pub fn pick(f: &mut Frame, p: &Pick, mode: Mode, bests: &Bests, now: Instant) {
     f.render_widget(Line::from(hint.dark_gray()).centered(), row(6));
 }
 
+/// THE HOT ONE's table: alone, hosting a room, or joining one by its code.
+pub struct Party {
+    pub choice: usize,
+    /// The code being typed, for joining.
+    pub code: String,
+    from: usize,
+    moved: Option<Instant>,
+    opened: Instant,
+}
+
+const PARTY: [&str; 3] = ["solo", "host a room", "join a room"];
+/// The choice that takes a code.
+pub const JOIN: usize = 2;
+pub const CODE_LEN: usize = 4;
+
+impl Party {
+    pub fn new(now: Instant) -> Self {
+        Party {
+            choice: 0,
+            code: String::new(),
+            from: 0,
+            moved: None,
+            opened: now,
+        }
+    }
+
+    pub fn step(&mut self, dir: i64, now: Instant) {
+        self.from = self.choice;
+        self.choice = (self.choice as i64 + dir).rem_euclid(PARTY.len() as i64) as usize;
+        self.moved = Some(now);
+    }
+
+    /// A letter typed: it goes on the code (and the choice is joining).
+    pub fn letter(&mut self, c: char, now: Instant) {
+        if !c.is_ascii_alphabetic() {
+            return;
+        }
+        if self.choice != JOIN {
+            self.from = self.choice;
+            self.choice = JOIN;
+            self.moved = Some(now);
+        }
+        if self.code.len() < CODE_LEN {
+            self.code.push(c.to_ascii_uppercase());
+        }
+    }
+
+    fn chip_at(&self, now: Instant) -> f64 {
+        let k = since(self.moved, now) / CHIP;
+        let to = self.choice as f64;
+        match k < 1.0 {
+            true => self.from as f64 + (to - self.from as f64) * ease_out_back(k),
+            false => to,
+        }
+    }
+}
+
+pub fn party(f: &mut Frame, p: &Party, now: Instant) {
+    let area = f.area();
+    let k = (since(Some(p.opened), now) / POP).min(1.0);
+    dim(f.buffer_mut(), 0.6 * k);
+    let (r, g, b) = HOT_PINK;
+    let color = Color::Rgb(r, g, b);
+    let h = 9.min(area.height);
+    let w = ((46.0 * (0.7 + 0.3 * ease_out_back(k))).round() as u16).min(area.width);
+    let rect = Rect::new(
+        area.x + (area.width - w) / 2,
+        area.y + (area.height - h) / 2,
+        w,
+        h,
+    );
+    let block = Block::bordered()
+        .border_type(BorderType::Thick)
+        .border_style(color)
+        .title(Line::from(" THE HOT ONE ".bold()).centered());
+    let inner = block.inner(rect);
+    f.render_widget(Clear, rect);
+    f.render_widget(block, rect);
+    let row = |dy: u16| Rect::new(inner.x, inner.y + dy, inner.width, 1);
+    let labels: Vec<String> = PARTY.iter().map(|l| l.to_string()).collect();
+    options(f.buffer_mut(), row(1), &labels, p.chip_at(now), color);
+    let blink = ((since(Some(p.opened), now) * 2.0) as u64).is_multiple_of(2);
+    let say = match p.choice {
+        0 => Line::from("the table's all yours".dark_gray()),
+        1 => Line::from("you get a code for your friends".dark_gray()),
+        _ => {
+            let typed: String = p.code.chars().flat_map(|c| [c, ' ']).collect();
+            let left = "_ ".repeat(CODE_LEN - p.code.len());
+            let caret = if blink && p.code.len() < CODE_LEN {
+                "▌"
+            } else {
+                " "
+            };
+            Line::from(vec![
+                "code  ".dark_gray(),
+                typed.fg(color).bold(),
+                caret.fg(color),
+                left.dark_gray(),
+            ])
+        }
+    };
+    f.render_widget(say.centered(), row(3));
+    let hint = match (p.choice == JOIN, crate::settings::touch()) {
+        (true, _) => "type the code · enter join · esc back",
+        (false, true) => "swipe pick · tap go · ✕ back",
+        (false, false) => "←/→ pick · enter go · esc back",
+    };
+    f.render_widget(Line::from(hint.dark_gray()).centered(), row(6));
+}
+
 /// Ease out with a slight overshoot (~6%) before settling.
 fn ease_out_back(k: f64) -> f64 {
     let (c1, k) = (1.2, k - 1.0);

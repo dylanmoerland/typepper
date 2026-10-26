@@ -1096,11 +1096,15 @@ mod tests {
         t.tick(at(COURSE_SECS + PICK_SECS));
         assert!(t.plate.is_none() && t.chewing.is_some());
         assert_eq!(t.bites.len(), 1);
+        assert_eq!(t.bites[0].hot, t.bites[0].pepper == plate.hot);
         let down = at(COURSE_SECS + PICK_SECS + BITE_SECS);
         t.tick(down);
-        if t.finished.is_none() {
-            assert_eq!(t.plates, 1);
-            assert_eq!(t.course_in(down), Some(COURSE_SECS - PICK_SECS - BITE_SECS));
+        match t.bites[0].hot {
+            true => assert_eq!((t.bitten, t.plates), (Some(down), 0)),
+            false => {
+                assert_eq!((t.finished, t.plates), (None, 1));
+                assert_eq!(t.course_in(down), Some(COURSE_SECS - PICK_SECS - BITE_SECS));
+            }
         }
     }
 

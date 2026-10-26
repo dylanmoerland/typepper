@@ -61,22 +61,68 @@ pub fn draw(
     strip: bool,
     pepper: Option<usize>,
 ) -> Option<Rect> {
-    let now = Instant::now();
-    let col = column(f.area());
-    if t.finished.is_some() {
-        return results(f, col, t, outcome, share, strip, now);
-    }
-    let [above, panel, _, help] = Layout::vertical([
+    play(f, t, outcome, share, strip, pepper, &[], None)
+}
+
+/// Someone else typing the same text (a room): where their caret is, in
+/// their color, with their initial.
+pub struct Ghost {
+    pub at: usize,
+    pub color: Color,
+    pub initial: char,
+}
+
+/// The screen (above the typing panel, the panel, below it, the help line).
+pub fn play_layout(area: Rect) -> [Rect; 4] {
+    Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(18),
         Constraint::Fill(1),
         Constraint::Length(1),
     ])
-    .areas(col);
+    .areas(column(area))
+}
+
+/// `draw`, with the others in the room ghosting along the text, and the
+/// room's own help line (`hint`) instead of the usual one.
+#[allow(clippy::too_many_arguments)]
+pub fn play(
+    f: &mut Frame,
+    t: &Test,
+    outcome: Option<Outcome>,
+    share: Option<&str>,
+    strip: bool,
+    pepper: Option<usize>,
+    ghosts: &[Ghost],
+    hint: Option<&str>,
+) -> Option<Rect> {
+    let now = Instant::now();
+    let col = column(f.area());
+    if t.finished.is_some() {
+        return results(f, col, t, outcome, share, strip, now);
+    }
+    let [above, panel, _, help] = play_layout(f.area());
     fx::speed_lines(f.buffer_mut(), t, now);
     fx::flames(f.buffer_mut(), t, now);
     fx::knocked(f.buffer_mut(), t, now, panel);
     let (text, combo) = typing(f, panel, help, t, now);
+    if let Some(hint) = hint {
+        f.render_widget(Clear, help);
+        f.render_widget(
+            Line::from(format!("  {hint}  ").dark_gray()).centered(),
+            help,
+        );
+    }
+    // the others' carets ride the text, behind your own
+    for g in ghosts {
+        if let Some(p) = text.pos(g.at).filter(|&p| p != text.caret) {
+            let cell = &mut f.buffer_mut()[p];
+            if cell.symbol() == " " {
+                cell.set_symbol(&g.initial.to_ascii_uppercase().to_string());
+            }
+            cell.set_fg(Color::Black).set_bg(g.color);
+        }
+    }
     fx::crowd(f.buffer_mut(), t, now, panel);
     // milestones slam into the space over the crowd
     let sky = Rect {
@@ -232,7 +278,7 @@ fn plate(f: &mut Frame, t: &Test, pepper: Option<usize>, now: Instant) {
 
 /// The peppers on a plate, by their place on it: all innocent colors, no
 /// hotter-looking than the next.
-const PLATE_COLORS: [Rgb; 6] = [
+pub const PLATE_COLORS: [Rgb; 6] = [
     (60, 190, 70),
     (245, 200, 40),
     (255, 120, 40),

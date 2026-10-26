@@ -87,15 +87,7 @@ impl Replay {
         for &(ms, input) in &self.inputs {
             varint(&mut b, (ms - last).into());
             last = ms;
-            varint(
-                &mut b,
-                match input {
-                    Input::Backspace => 0,
-                    Input::End => 1,
-                    Input::Char(c) => c as u64 + 2,
-                    Input::Pick(n) => PICK + n as u64,
-                },
-            );
+            varint(&mut b, op(input));
         }
         b
     }
@@ -128,20 +120,12 @@ impl Replay {
         for _ in 0..count {
             let gap = u32::try_from(r.varint()?).map_err(|_| Bad::Clock)?;
             ms = ms.checked_add(gap).ok_or(Bad::Clock)?;
-            let input = match r.varint()? {
-                0 => Input::Backspace,
-                1 => Input::End,
-                n if n >= PICK && format == FORMAT => {
-                    Input::Pick(u8::try_from(n - PICK).map_err(|_| Bad::Char)?)
-                }
-                n => Input::Char(
-                    u32::try_from(n - 2)
-                        .ok()
-                        .and_then(char::from_u32)
-                        .ok_or(Bad::Char)?,
-                ),
-            };
-            inputs.push((ms, input));
+            let n = r.varint()?;
+            // format 1 has no picks: an op past the characters is junk there
+            if n >= PICK && format == FORMAT_1 {
+                return Err(Bad::Char);
+            }
+            inputs.push((ms, input(n).ok_or(Bad::Char)?));
         }
         let replay = Replay {
             engine,
@@ -162,6 +146,26 @@ impl Replay {
             _ => Err(Bad::Leftover),
         }
     }
+}
+
+/// An input as its op number (format 2): what the bytes and the rooms carry.
+pub fn op(input: Input) -> u64 {
+    match input {
+        Input::Backspace => 0,
+        Input::End => 1,
+        Input::Char(c) => c as u64 + 2,
+        Input::Pick(n) => PICK + n as u64,
+    }
+}
+
+/// The input an op number means, if any.
+pub fn input(op: u64) -> Option<Input> {
+    Some(match op {
+        0 => Input::Backspace,
+        1 => Input::End,
+        n if n >= PICK => Input::Pick(u8::try_from(n - PICK).ok()?),
+        n => Input::Char(char::from_u32(u32::try_from(n - 2).ok()?)?),
+    })
 }
 
 /// Unsigned LEB128: 7 bits a byte, the top bit says another follows.
@@ -262,6 +266,16 @@ mod tests {
         big.truncate(big.len() - 3);
         varint(&mut big, PICK + 256); // past any plate
         assert_eq!(Replay::decode(&big), Err(Bad::Char));
+        for i in [
+            Input::Backspace,
+            Input::End,
+            Input::Char('é'),
+            Input::Pick(5),
+        ] {
+            assert_eq!(input(op(i)), Some(i));
+        }
+        assert_eq!(input(PICK + 256), None);
+        assert_eq!(input(0xd800 + 2), None, "a surrogate");
     }
 
     #[test]
